@@ -1,0 +1,37 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.so
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+
+# --- UV ---
+.uv/
+uv.lock
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
+
+# --- Python Build ---
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Environment variables ---
+.env
+.env.*
+*.env.local
