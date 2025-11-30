@@ -1571,6 +1571,7 @@ requests==2.32.5 \
     #   jsonschema-path
     #   opentelemetry-exporter-otlp-proto-http
     #   pydantic-ai-slim
+    #   stripe
 rich==14.2.0 \
     --hash=sha256:73ff50c7c0c1c77c8243079283f4edb376f0f6442433aecb8ce7e6d0b92d1fe4 \
     --hash=sha256:76bc51fe2e57d2b1be1f96c524b890b816e334ab4c1e45888799bfaab0021edd
@@ -1724,6 +1725,10 @@ starlette==0.50.0 \
     #   fastapi
     #   mcp
     #   pydantic-ai-slim
+stripe==14.0.1 \
+    --hash=sha256:f2d56345bf5d41c1f21f814b00174a3173a0b5eb4e8fc46a8f779e3d7a2efc6e \
+    --hash=sha256:ff25c5e5f085beaa98b6b9c2c729d22ad99068196cbd83fdf82669fd08311b76
+    # via sf
 temporalio==1.19.0 \
     --hash=sha256:162459c293553be39994f20c635a132f7332ae71bd7ba4042f8473701fcf1c7c \
     --hash=sha256:c2d6d5cad8aec56e048705aa4f0bab83fec15343757ea7acf8504f2e0c289b60 \
@@ -1795,6 +1800,7 @@ typing-extensions==4.15.0 \
     #   pydantic-core
     #   referencing
     #   starlette
+    #   stripe
     #   temporalio
     #   typing-inspection
 typing-inspection==0.4.2 \
