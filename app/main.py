@@ -1,15 +1,19 @@
-"""Main module for the FastAPI application."""
+# app/main.py
 from fastapi import FastAPI, Request, HTTPException
+from dotenv import load_dotenv
 import uvicorn
-
+load_dotenv()
+from .db import init_db, count_embeddings
+from .loader import load_products_to_db
 from app.models import ConversationalResponse
 from kapso.use_kapso import use_kapso
 
+
+
 app = FastAPI()
 
-
 @app.post("/whatsapp" )
-async def whatsapp_agent(request: Request) -> ConversationalResponse:
+async def whatsapp_agent(request: Request):
     """
     Endpoint that receives a query, processes it using the agent logic,
     sends the response via Kapso (WhatsApp), and returns the response.
