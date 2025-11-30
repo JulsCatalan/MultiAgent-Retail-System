@@ -28,7 +28,7 @@ app.add_middleware(
 # ==================== MODELS ====================
 
 class Product(BaseModel):
-    id: str
+    id: int
     name: str
     brand: str
     category: str
@@ -56,7 +56,7 @@ class SearchResponse(BaseModel):
     total: int
 
 class CartItem(BaseModel):
-    id: str
+    id: int
     name: str
     brand: str
     category: str
@@ -283,67 +283,6 @@ async def search(request: SearchRequest):
         )
     except Exception as e:
         print(f"❌ Error en búsqueda: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/create-checkout-session", response_model=CheckoutResponse)
-async def create_checkout_session(request: CheckoutRequest):
-    """
-    Crea una sesión de checkout (placeholder - integrar con Stripe)
-    """
-    try:
-        # Calcular total
-        total = sum(item.price * item.quantity for item in request.cart)
-        
-        # TODO: Integrar con Stripe
-        # Por ahora, retornamos una URL de ejemplo
-        # En producción, aquí crearías la sesión de Stripe
-        
-        # import stripe
-        # stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-        # 
-        # line_items = [
-        #     {
-        #         "price_data": {
-        #             "currency": "mxn",
-        #             "product_data": {
-        #                 "name": item.name,
-        #                 "images": [item.image],
-        #             },
-        #             "unit_amount": int(item.price * 100),
-        #         },
-        #         "quantity": item.quantity,
-        #     }
-        #     for item in request.cart
-        # ]
-        # 
-        # session = stripe.checkout.Session.create(
-        #     payment_method_types=["card"],
-        #     line_items=line_items,
-        #     mode="payment",
-        #     success_url=f"{os.getenv('FRONTEND_URL')}/success?session_id={{CHECKOUT_SESSION_ID}}",
-        #     cancel_url=f"{os.getenv('FRONTEND_URL')}/cancel",
-        #     customer_email=request.customer_phone,  # O email si lo capturas
-        #     metadata={
-        #         "customer_name": request.customer_name,
-        #         "customer_phone": request.customer_phone,
-        #     }
-        # )
-        
-        # Por ahora, URL de ejemplo
-        session_id = f"cs_test_{request.customer_name.replace(' ', '_')}"
-        checkout_url = f"https://checkout.stripe.com/pay/{session_id}"
-        
-        print(f"✅ Checkout creado para {request.customer_name}")
-        print(f"   Total: ${total:.2f} MXN")
-        print(f"   Items: {len(request.cart)}")
-        
-        return CheckoutResponse(
-            checkout_url=checkout_url,
-            session_id=session_id
-        )
-        
-    except Exception as e:
-        print(f"❌ Error creando checkout: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/whatsapp")

@@ -60,7 +60,7 @@ class Product(BaseModel):
     type: Optional[str] = None
 
 class CartItem(BaseModel):
-    id: int  # ← Cambiar de str a int también aquí
+    id: int  # ← Cambiar de str a int también
     name: str
     brand: str
     category: str
