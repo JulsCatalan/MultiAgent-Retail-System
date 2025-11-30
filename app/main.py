@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import json
+import os
 
 load_dotenv()
 
@@ -75,23 +75,29 @@ class CheckoutResponse(BaseModel):
     checkout_url: str
     session_id: str
 
+
+# app/main.py - Reemplaza los endpoints de products y agrega uno nuevo
+
 # ==================== HELPER FUNCTIONS ====================
 
 def cosine_similarity(a, b):
     """Calcula similitud coseno entre dos vectores"""
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-def search_products_vector(query: str, constraints: SearchConstraints, k: int = 12) -> List[Product]:
+def get_products_simple(
+    category: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    page: int = 1,
+    page_size: int = 20
+) -> tuple[List[Product], int]:
     """
-    Búsqueda vectorial de productos usando embeddings
+    Obtiene productos con filtros SQL simples (sin búsqueda vectorial)
     """
-    # Generar embedding de la query
-    query_embedding = embed_text(query)
-    
     conn = get_connection()
     cur = conn.cursor()
     
-    # Construir query SQL base
+    # Query base
     sql_query = """
         SELECT 
             article_id,
@@ -101,77 +107,68 @@ def search_products_vector(query: str, constraints: SearchConstraints, k: int = 
             colour_group_name,
             detail_desc,
             price_mxn,
-            image_url,
-            embedding
+            image_url
         FROM products
-        WHERE embedding IS NOT NULL
+        WHERE 1=1
     """
     params = []
     
-    # Aplicar filtros de constraints
-    if constraints.category:
+    # Aplicar filtros
+    if category:
         sql_query += " AND product_group_name = ?"
-        params.append(constraints.category)
+        params.append(category)
     
-    if constraints.color:
-        sql_query += " AND colour_group_name LIKE ?"
-        params.append(f"%{constraints.color}%")
-    
-    if constraints.price_min is not None:
+    if min_price is not None:
         sql_query += " AND price_mxn >= ?"
-        params.append(constraints.price_min)
+        params.append(min_price)
     
-    if constraints.price_max is not None:
+    if max_price is not None:
         sql_query += " AND price_mxn <= ?"
-        params.append(constraints.price_max)
+        params.append(max_price)
+    
+    # Contar total (antes de paginar)
+    count_query = f"SELECT COUNT(*) FROM ({sql_query})"
+    cur.execute(count_query, params)
+    total = cur.fetchone()[0]
+    
+    # Agregar paginación
+    offset = (page - 1) * page_size
+    sql_query += " ORDER BY prod_name LIMIT ? OFFSET ?"
+    params.extend([page_size, offset])
     
     # Ejecutar query
     cur.execute(sql_query, params)
     rows = cur.fetchall()
     
-    # Calcular similitudes y rankear
-    products_with_scores = []
+    # Formatear productos
+    products = []
     for row in rows:
-        product_embedding = json.loads(row[8])
-        similarity = cosine_similarity(query_embedding, product_embedding)
+        # Convertir article_id a int
+        try:
+            product_id = int(row[0])
+        except (ValueError, TypeError):
+            product_id = abs(hash(row[0])) % (10 ** 9)
         
-        products_with_scores.append({
-            "product": Product(
-                id=row[0],
-                name=row[1],
-                brand=row[2] or "Fashion Store",
-                category=row[3] or "General",
-                price=row[6],
-                image=row[7] or "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=400&h=600&fit=crop",
-                description=row[5],
-                color=row[4],
-                type=row[2]
-            ),
-            "score": similarity
-        })
+        products.append(Product(
+            id=product_id,
+            name=row[1],
+            brand=row[2] or "Fashion Store",
+            category=row[3] or "General",
+            price=row[6],
+            image=row[7] or "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=400&h=600&fit=crop",
+            description=row[5],
+            color=row[4],
+            type=row[2]
+        ))
     
     conn.close()
     
-    # Ordenar por similitud y tomar top k
-    products_with_scores.sort(key=lambda x: x["score"], reverse=True)
-    return [item["product"] for item in products_with_scores[:k]]
+    return products, total
 
-# ==================== STARTUP ====================
-
-@app.on_event("startup")
-def startup_event():
-    print("📦 Inicializando base de datos...")
-    init_db()
-
-    existing = count_embeddings()
-
-    if existing == 0:
-        print("📤 No hay embeddings. Cargando datos y generando embeddings...")
-        csv_path = "app/data/products.csv"
-        load_products_to_db(csv_path)
-        print("✅ Datos cargados correctamente.")
-    else:
-        print(f"🔍 Embeddings existentes detectados: {existing}. No se recargarán datos.")
+# search_products_vector se queda para el endpoint /search y WhatsApp
+def search_products_vector(query: str, constraints: SearchConstraints, k: int = 12) -> List[Product]:
+    # ... (mantén esta función tal cual para /search)
+    pass
 
 # ==================== ENDPOINTS ====================
 
@@ -181,10 +178,11 @@ def root():
         "status": "API funcionando",
         "version": "1.0.0",
         "endpoints": {
-            "search": "POST /search",
-            "products": "GET /products",
-            "categories": "GET /categories",
+            "products": "GET /products - Obtiene productos con filtros simples",
+            "categories": "GET /categories - Lista de categorías",
+            "search": "POST /search - Búsqueda vectorial (para WhatsApp)",
             "checkout": "POST /create-checkout-session",
+            "regenerate": "POST /regenerate-embeddings",
             "whatsapp": "POST /whatsapp",
             "health": "GET /health"
         }
@@ -198,51 +196,37 @@ def health_check():
         "embeddings_count": count_embeddings()
     }
 
-@app.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest):
-    """
-    Búsqueda vectorial de productos con filtros opcionales
-    """
-    try:
-        products = search_products_vector(
-            request.query,
-            request.constraints,
-            request.k
-        )
-        
-        return SearchResponse(
-            items=products,
-            total=len(products)
-        )
-    except Exception as e:
-        print(f"❌ Error en búsqueda: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+class ProductsResponse(BaseModel):
+    items: List[Product]
+    total: int
+    page: int
+    page_size: int
 
-@app.get("/products", response_model=SearchResponse)
+@app.get("/products", response_model=ProductsResponse)
 def get_products(
-    category: Optional[str] = Query(None),
-    min_price: Optional[float] = Query(None),
-    max_price: Optional[float] = Query(None),
-    search: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100)
+    category: Optional[str] = Query(None, description="Filtrar por categoría"),
+    min_price: Optional[float] = Query(None, description="Precio mínimo"),
+    max_price: Optional[float] = Query(None, description="Precio máximo"),
+    page: int = Query(1, ge=1, description="Número de página"),
+    page_size: int = Query(20, ge=1, le=100, description="Productos por página")
 ):
     """
-    Obtiene productos con filtros opcionales (endpoint alternativo)
+    Obtiene productos con filtros SQL simples (sin búsqueda vectorial)
     """
     try:
-        constraints = SearchConstraints(
+        products, total = get_products_simple(
             category=category,
-            price_min=min_price,
-            price_max=max_price
+            min_price=min_price,
+            max_price=max_price,
+            page=page,
+            page_size=page_size
         )
         
-        query = search if search else "productos de moda"
-        products = search_products_vector(query, constraints, page_size)
-        
-        return SearchResponse(
+        return ProductsResponse(
             items=products,
-            total=len(products)
+            total=total,
+            page=page,
+            page_size=page_size
         )
     except Exception as e:
         print(f"❌ Error obteniendo productos: {str(e)}")
@@ -251,7 +235,7 @@ def get_products(
 @app.get("/categories")
 def get_categories():
     """
-    Obtiene todas las categorías disponibles
+    Obtiene todas las categorías disponibles con conteo de productos
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -276,6 +260,26 @@ def get_categories():
     conn.close()
     
     return {"categories": categories}
+
+@app.post("/search", response_model=SearchResponse)
+async def search(request: SearchRequest):
+    """
+    Búsqueda vectorial de productos (usado por WhatsApp)
+    """
+    try:
+        products = search_products_vector(
+            request.query,
+            request.constraints,
+            request.k
+        )
+        
+        return SearchResponse(
+            items=products,
+            total=len(products)
+        )
+    except Exception as e:
+        print(f"❌ Error en búsqueda: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/create-checkout-session", response_model=CheckoutResponse)
 async def create_checkout_session(request: CheckoutRequest):
@@ -356,4 +360,57 @@ async def whatsapp_agent(request: Request):
             )
     except Exception as e:
         print(f"❌ Error en webhook: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+class RegenerateRequest(BaseModel):
+    password: str
+
+@app.get("/regenerate-embeddings")
+async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD")):
+    """
+    Fuerza la regeneración de todos los embeddings
+    Requiere contraseña de administrador como query parameter
+    
+    Uso: POST /regenerate-embeddings?ADMIN_PASSWORD=tu_contraseña
+    """
+    # Verificar contraseña
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+    
+    if password != admin_password:
+        raise HTTPException(status_code=403, detail="Contraseña incorrecta")
+    
+    try:
+        print("🔄 Iniciando regeneración de embeddings...")
+        
+        # Borrar embeddings existentes
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("UPDATE products SET embedding = NULL")
+        conn.commit()
+        
+        deleted_count = cur.rowcount
+        print(f"🗑️  Embeddings borrados: {deleted_count}")
+        
+        conn.close()
+        
+        # Recargar productos y generar nuevos embeddings
+        csv_path = "app/data/products.csv"
+        load_products_to_db(csv_path)
+        
+        # Contar nuevos embeddings
+        new_count = count_embeddings()
+        
+        print(f"✅ Regeneración completada: {new_count} embeddings creados")
+        
+        return {
+            "status": "success",
+            "message": "Embeddings regenerados exitosamente",
+            "embeddings_deleted": deleted_count,
+            "embeddings_created": new_count
+        }
+        
+    except Exception as e:
+        print(f"❌ Error regenerando embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

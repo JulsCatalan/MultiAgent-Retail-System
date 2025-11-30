@@ -48,17 +48,27 @@ class WhatsAppRequest(BaseModel):
     conversation_id: str
     phone_number: Optional[str] = None
 
+class Product(BaseModel):
+    id: int  # ← Cambiar de str a int
+    name: str
+    brand: str
+    category: str
+    price: float
+    image: str
+    description: Optional[str] = None
+    color: Optional[str] = None
+    type: Optional[str] = None
 
 class CartItem(BaseModel):
-    product_id: str
-    title: str
-    brand: Optional[str] = None
-    category: Optional[str] = None
+    id: int  # ← Cambiar de str a int también aquí
+    name: str
+    brand: str
+    category: str
     price: float
-    quantity: int = 1
+    image: str
+    quantity: int
     color: Optional[str] = None
     size: Optional[str] = None
-    image_url: Optional[str] = None
 
 
 class CheckoutRequest(BaseModel):
