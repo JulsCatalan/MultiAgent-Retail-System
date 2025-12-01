@@ -9,7 +9,8 @@ def get_connection():
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
-
+    
+    # Tabla principal de productos
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             article_id TEXT PRIMARY KEY,
@@ -32,6 +33,50 @@ def init_db():
         )
     """)
 
+    # Tabla de carritos por conversación/usuario
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS carts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT UNIQUE NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Items dentro del carrito
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cart_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cart_id INTEGER NOT NULL,
+            article_id TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(cart_id) REFERENCES carts(id),
+            FOREIGN KEY(article_id) REFERENCES products(article_id)
+        )
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cart_items_cart_id
+        ON cart_items(cart_id)
+    """)
+
+    # Productos más recientes mostrados al usuario (para mapping tipo "Producto 1")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recent_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            article_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_recent_products_conversation
+        ON recent_products(conversation_id)
+    """)
+    
     conn.commit()
     conn.close()
 

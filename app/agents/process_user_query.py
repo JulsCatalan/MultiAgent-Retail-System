@@ -5,6 +5,8 @@ from .router import route_query
 from .query_builder import build_search_query
 from .retriever import search_products
 from .generator import generate_response
+from .cart_agent import handle_cart_interaction
+from ..cart import save_recent_products
 from models import User, ConversationMessage
 from kapso.client import KapsoClient
 
@@ -162,8 +164,46 @@ async def process_user_query(
     """
     # Obtener historial de conversación usando el cliente proporcionado (si existe)
     conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
+
+    # 1) Revisar si el mensaje es sobre el carrito (ver carrito, agregar algo, etc.)
+    if user.conversation_id:
+        cart_result = handle_cart_interaction(
+            conversation_id=user.conversation_id,
+            user_message=user_message,
+        )
+    else:
+        cart_result = {"handled": False}
+
+    if cart_result.get("handled"):
+        response = cart_result.get("response", "")
+        products = cart_result.get("products", [])
+        routing_decision = "general"
+
+        # Enviar mensaje a través de Kapso si el cliente está disponible
+        message_sent = False
+        if kapso_client is not None and user.conversation_id:
+            try:
+                print("📤 Enviando respuesta a conversación %s", user.conversation_id)
+                kapso_client.send_message(user.conversation_id, response)
+                message_sent = True
+                print("✅ Mensaje enviado exitosamente")
+            except Exception as e:
+                print("❌ Error enviando mensaje por Kapso: %s", e)
+        else:
+            if kapso_client is None:
+                print("ℹ️ No se proporcionó cliente de Kapso, mensaje no enviado")
+            elif not user.conversation_id:
+                print("⚠️ Usuario sin conversation_id, mensaje no enviado")
+
+        return {
+            "response": response,
+            "products": products,
+            "routing_decision": routing_decision,
+            "conversation_history": conversation_context,
+            "message_sent": message_sent,
+        }
     
-    # Pasar el contexto al router para que tome una mejor decisión
+    # 2) Pasar el contexto al router para que tome una mejor decisión
     routing = route_query(user_message, conversation_context=conversation_context)
     print("📝 Routing: %s", routing)
     
@@ -174,19 +214,29 @@ async def process_user_query(
             user_message=user_message,
             products=products,
             conversation_context=conversation_context,
-            routing_decision=routing["decision"]
+            routing_decision=routing["decision"],
         )
     else:
         # Si es "search", primero construir la query optimizada usando todo el contexto
-        optimized_query = build_search_query(user_message, conversation_context=conversation_context)
-        
+        optimized_query = build_search_query(
+            user_message, conversation_context=conversation_context
+        )
+
         # Luego buscar productos usando la query optimizada
         products = search_products(optimized_query)
+
+        # Guardar productos recientes para poder referenciarlos como "Producto 1", etc.
+        if user.conversation_id:
+            try:
+                save_recent_products(user.conversation_id, products)
+            except Exception as e:
+                print("⚠️ Error guardando productos recientes: %s", e)
+
         response = generate_response(
             user_message=user_message,
             products=products,
             conversation_context=conversation_context,
-            routing_decision=routing["decision"]
+            routing_decision=routing["decision"],
         )
     
     # Enviar mensaje a través de Kapso si el cliente está disponible
