@@ -170,14 +170,24 @@ async def process_user_query(
     # Si el routing es "general", generar respuesta sin buscar productos
     if routing["decision"] == "general":
         products = []
-        response = generate_response(user_message, products)
+        response = generate_response(
+            user_message=user_message,
+            products=products,
+            conversation_context=conversation_context,
+            routing_decision=routing["decision"]
+        )
     else:
         # Si es "search", primero construir la query optimizada usando todo el contexto
         optimized_query = build_search_query(user_message, conversation_context=conversation_context)
         
         # Luego buscar productos usando la query optimizada
         products = search_products(optimized_query)
-        response = generate_response(user_message, products)
+        response = generate_response(
+            user_message=user_message,
+            products=products,
+            conversation_context=conversation_context,
+            routing_decision=routing["decision"]
+        )
     
     # Enviar mensaje a través de Kapso si el cliente está disponible
     message_sent = False

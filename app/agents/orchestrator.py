@@ -25,7 +25,12 @@ async def process_user_query(user_message: str) -> dict:
         print("📦 Productos encontrados: %s", len(products))
     
     # 3. Generator crea la respuesta final
-    response = generate_response(user_message, products)
+    response = generate_response(
+        user_message=user_message,
+        products=products or [],
+        conversation_context=None,
+        routing_decision=routing["decision"]
+    )
     
     return {
         "response": response,
