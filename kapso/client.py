@@ -2,7 +2,9 @@ import os
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
+import logging
 
+logger = logging.getLogger(__name__)
 
 class KapsoClient:
     """Minimal Kapso API client focused on WhatsApp templates.
@@ -214,9 +216,9 @@ class KapsoClient:
         # Log response for debugging
         try:
             response_json = response.json()
-            print(f"DEBUG: Send message response: {response_json}")
+            logger.info("DEBUG: Send message response: %s", response_json)
         except Exception as e:
-            print(f"DEBUG: Could not parse response JSON: {e}")
+            logger.error("DEBUG: Could not parse response JSON: %s", e)
         
         response.raise_for_status()
         return response_json

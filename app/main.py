@@ -40,18 +40,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
-    print("📦 Inicializando base de datos...")
+    logger.info("📦 Inicializando base de datos...")
     init_db()
 
     existing = count_embeddings()
 
     if existing == 0:
-        print("📤 No hay embeddings. Cargando datos y generando embeddings...")
+        logger.info("📤 No hay embeddings. Cargando datos y generando embeddings...")
         csv_path = "app/data/products.csv"
         load_products_to_db(csv_path)
-        print("✅ Datos cargados correctamente.")
+        logger.info("✅ Datos cargados correctamente.")
     else:
-        print(f"🔍 Embeddings existentes detectados: {existing}. No se recargarán datos.")
+        logger.info("🔍 Embeddings existentes detectados: %s. No se recargarán datos.", existing)
 
 # ==================== ENDPOINTS ====================
 
