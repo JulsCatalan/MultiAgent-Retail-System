@@ -5,7 +5,7 @@ from models import User, UserMetadata
 import os
 import asyncio
 from .data_loader import get_context_with_history
-from agents
+from app.agents.process_user_query import process_user_query
 from app.models import AskRequest
 from .client import KapsoClient
 
