@@ -11,14 +11,16 @@ def load_products_to_db(csv_path: str):
     cur = conn.cursor()
 
     for _, row in df.iterrows():
-
-        # Creamos un texto completo del producto para el embedding
-        text_to_embed = f"""
-        {row['prod_name']} 
-        {row['product_type_name']} 
-        {row['product_group_name']} 
-        {row['detail_desc']}
-        """
+        # MEJORA: Texto más estructurado y con contexto
+        # Agregar "producto de moda" y estructurar mejor
+        text_to_embed = f"""producto de moda ropa 
+Nombre: {row['prod_name']}
+Tipo: {row['product_type_name']} 
+Categoría: {row['product_group_name']}
+Color: {row['colour_group_name']}
+Descripción: {row['detail_desc']}
+Departamento: {row['department_name']}
+Estilo: {row['graphical_appearance_name']}"""
 
         embedding = embed_text(text_to_embed)
 

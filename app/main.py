@@ -1,6 +1,7 @@
 # app/main.py
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from .db import init_db, count_embeddings
 from typing import Optional, List
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -36,6 +37,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup_event():
+    print("📦 Inicializando base de datos...")
+    init_db()
+
+    existing = count_embeddings()
+
+    if existing == 0:
+        print("📤 No hay embeddings. Cargando datos y generando embeddings...")
+        csv_path = "app/data/products.csv"
+        load_products_to_db(csv_path)
+        print("✅ Datos cargados correctamente.")
+    else:
+        print(f"🔍 Embeddings existentes detectados: {existing}. No se recargarán datos.")
 
 # ==================== ENDPOINTS ====================
 
