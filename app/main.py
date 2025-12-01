@@ -8,167 +8,29 @@ import os
 
 load_dotenv()
 
-from .db import init_db, count_embeddings, get_connection
+from .db import count_embeddings, get_connection
 from .loader import load_products_to_db
-from .embeddings import embed_text
 from kapso.use_kapso import use_kapso
-import numpy as np
+from .schemas import (
+    Product,
+    SearchRequest,
+    SearchResponse
+)
+from .product_utils import (
+    get_products_simple,
+    search_products_vector
+)
 
 app = FastAPI(title="Fashion Store API", version="1.0.0")
 
 # CORS para tu frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especifica tu dominio
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ==================== MODELS ====================
-
-class Product(BaseModel):
-    id: int
-    name: str
-    brand: str
-    category: str
-    price: float
-    image: str
-    description: Optional[str] = None
-    color: Optional[str] = None
-    type: Optional[str] = None
-
-class SearchConstraints(BaseModel):
-    category: Optional[str] = None
-    brand: Optional[str] = None
-    color: Optional[str] = None
-    size: Optional[str] = None
-    price_min: Optional[float] = None
-    price_max: Optional[float] = None
-
-class SearchRequest(BaseModel):
-    query: str
-    constraints: SearchConstraints = SearchConstraints()
-    k: int = 12
-
-class SearchResponse(BaseModel):
-    items: List[Product]
-    total: int
-
-class CartItem(BaseModel):
-    id: int
-    name: str
-    brand: str
-    category: str
-    price: float
-    image: str
-    quantity: int
-    color: Optional[str] = None
-    size: Optional[str] = None
-
-class CheckoutRequest(BaseModel):
-    cart: List[CartItem]
-    customer_name: str
-    customer_phone: str
-
-class CheckoutResponse(BaseModel):
-    checkout_url: str
-    session_id: str
-
-
-# app/main.py - Reemplaza los endpoints de products y agrega uno nuevo
-
-# ==================== HELPER FUNCTIONS ====================
-
-def cosine_similarity(a, b):
-    """Calcula similitud coseno entre dos vectores"""
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-def get_products_simple(
-    category: Optional[str] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    page: int = 1,
-    page_size: int = 20
-) -> tuple[List[Product], int]:
-    """
-    Obtiene productos con filtros SQL simples (sin búsqueda vectorial)
-    """
-    conn = get_connection()
-    cur = conn.cursor()
-    
-    # Query base
-    sql_query = """
-        SELECT 
-            article_id,
-            prod_name,
-            product_type_name,
-            product_group_name,
-            colour_group_name,
-            detail_desc,
-            price_mxn,
-            image_url
-        FROM products
-        WHERE 1=1
-    """
-    params = []
-    
-    # Aplicar filtros
-    if category:
-        sql_query += " AND product_group_name = ?"
-        params.append(category)
-    
-    if min_price is not None:
-        sql_query += " AND price_mxn >= ?"
-        params.append(min_price)
-    
-    if max_price is not None:
-        sql_query += " AND price_mxn <= ?"
-        params.append(max_price)
-    
-    # Contar total (antes de paginar)
-    count_query = f"SELECT COUNT(*) FROM ({sql_query})"
-    cur.execute(count_query, params)
-    total = cur.fetchone()[0]
-    
-    # Agregar paginación
-    offset = (page - 1) * page_size
-    sql_query += " ORDER BY prod_name LIMIT ? OFFSET ?"
-    params.extend([page_size, offset])
-    
-    # Ejecutar query
-    cur.execute(sql_query, params)
-    rows = cur.fetchall()
-    
-    # Formatear productos
-    products = []
-    for row in rows:
-        # Convertir article_id a int
-        try:
-            product_id = int(row[0])
-        except (ValueError, TypeError):
-            product_id = abs(hash(row[0])) % (10 ** 9)
-        
-        products.append(Product(
-            id=product_id,
-            name=row[1],
-            brand=row[2] or "Fashion Store",
-            category=row[3] or "General",
-            price=row[6],
-            image=row[7] or "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=400&h=600&fit=crop",
-            description=row[5],
-            color=row[4],
-            type=row[2]
-        ))
-    
-    conn.close()
-    
-    return products, total
-
-# search_products_vector se queda para el endpoint /search y WhatsApp
-def search_products_vector(query: str, constraints: SearchConstraints, k: int = 12) -> List[Product]:
-    # ... (mantén esta función tal cual para /search)
-    pass
 
 # ==================== ENDPOINTS ====================
 
