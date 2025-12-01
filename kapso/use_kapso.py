@@ -29,7 +29,7 @@ async def use_kapso(webhook_data: dict):
                 }
             
             message_ids = extract_message_ids_from_webhook(webhook_data)
-            logger.info("🔍 Message IDs: %s", message_ids)
+            
             
             if message_ids and message_deduplicator.are_messages_already_processed(message_ids):
                 logger.warning("⚠️ Mensaje DUPLICADO detectado y descartado: %s", message_ids)
@@ -120,7 +120,7 @@ async def handle_response(data_list: list) -> dict:
         with KapsoClient() as kapso_client:
             agent_response = await process_user_query(user, combined_message, kapso_client=kapso_client)
             
-            logger.info("✅ Respuesta del agente procesada y enviada a conversación %s", whatsapp_conversation_id)
+            
             
             return {
                 "status": "success",
