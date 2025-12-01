@@ -10,13 +10,19 @@ from kapso.client import KapsoClient
 logger = logging.getLogger(__name__)
 
 
-def get_conversation_messages(user: User, message_limit: int = 200) -> List[ConversationMessage]:
+def get_conversation_messages(
+    user: User, 
+    message_limit: int = 200,
+    kapso_client: Optional[KapsoClient] = None
+) -> List[ConversationMessage]:
     """
-    Obtiene el historial de conversación usando KapsoClient directamente.
+    Obtiene el historial de conversación usando KapsoClient.
     
     Args:
         user: Usuario con conversation_id
         message_limit: Número máximo de mensajes a obtener
+        kapso_client: Cliente de Kapso opcional. Si se proporciona, se usa este cliente.
+                     Si no, se crea uno nuevo.
         
     Returns:
         Lista de ConversationMessage ordenados por timestamp
@@ -26,63 +32,74 @@ def get_conversation_messages(user: User, message_limit: int = 200) -> List[Conv
         return []
     
     conversation_history = []
+    should_close_client = False
     
     try:
-        with KapsoClient() as kapso:
-            response = kapso.get_conversation_messages(
-                conversation_id=user.conversation_id,
-                page=1,
-                per_page=message_limit
-            )
-            
-            messages = response.get("data", [])
-            
-            if not isinstance(messages, list):
-                logger.error("❌ Formato de mensajes inválido: %s", type(messages))
-                return []
+        # Usar el cliente proporcionado o crear uno nuevo
+        if kapso_client is None:
+            kapso_client = KapsoClient()
+            should_close_client = True
+        
+        response = kapso_client.get_conversation_messages(
+            conversation_id=user.conversation_id,
+            page=1,
+            per_page=message_limit
+        )
+        
+        messages = response.get("data", [])
+        
+        if not isinstance(messages, list):
+            logger.error("❌ Formato de mensajes inválido: %s", type(messages))
+            return []
 
-            for msg in messages:
-                try:
-                    # Extraer información del mensaje
-                    direction = msg.get("direction", "")
-                    # Mapear direction a sender: "inbound" = "client", "outbound" = "cedamoney"
-                    sender = "client" if direction == "inbound" else "cedamoney"
+        for msg in messages:
+            try:
+                # Extraer información del mensaje
+                direction = msg.get("direction", "")
+                # Mapear direction a sender: "inbound" = "client", "outbound" = "cedamoney"
+                sender = "client" if direction == "inbound" else "cedamoney"
+                
+                text = msg.get("content", "")
+                
+                # Si no hay contenido en content, intentar obtenerlo de message_type_data
+                if not text:
+                    message_type_data = msg.get("message_type_data", {})
+                    if isinstance(message_type_data, dict):
+                        text = message_type_data.get("text", "")
+                
+                timestamp = msg.get("created_at", "")
+                message_type = msg.get("message_type", "text")
+                message_id = msg.get("id", "")
+                
+                # Generar descripción del mensaje según su tipo
+                message_content = _format_message_content(msg, text, message_type, sender)
+                
+                if message_content and message_content.strip():
+                    conversation_history.append(ConversationMessage(
+                        timestamp=timestamp,
+                        sender=sender,
+                        message=message_content.strip(),
+                        message_id=message_id
+                    ))
                     
-                    text = msg.get("content", "")
-                    
-                    # Si no hay contenido en content, intentar obtenerlo de message_type_data
-                    if not text:
-                        message_type_data = msg.get("message_type_data", {})
-                        if isinstance(message_type_data, dict):
-                            text = message_type_data.get("text", "")
-                    
-                    timestamp = msg.get("created_at", "")
-                    message_type = msg.get("message_type", "text")
-                    message_id = msg.get("id", "")
-                    
-                    # Generar descripción del mensaje según su tipo
-                    message_content = _format_message_content(msg, text, message_type, sender)
-                    
-                    if message_content and message_content.strip():
-                        conversation_history.append(ConversationMessage(
-                            timestamp=timestamp,
-                            sender=sender,
-                            message=message_content.strip(),
-                            message_id=message_id
-                        ))
-                        
-                except Exception as e:
-                    logger.error("❌ Error procesando mensaje: %s", e)
-                    continue
-            
-            # Ordenar por timestamp (más antiguos primero)
-            conversation_history.sort(key=lambda x: x.timestamp or "")
-            
+            except Exception as e:
+                logger.error("❌ Error procesando mensaje: %s", e)
+                continue
+        
+        # Ordenar por timestamp (más antiguos primero)
+        conversation_history.sort(key=lambda x: x.timestamp or "")
+        
     except Exception as e:
         logger.error("❌ Error obteniendo historial de Kapso: %s", e)
-        
+    finally:
+        # Cerrar el cliente solo si lo creamos nosotros
+        if should_close_client and kapso_client is not None:
+            try:
+                kapso_client.close()
+            except Exception as e:
+                logger.warning("⚠️ Error cerrando cliente de Kapso: %s", e)
     
-    logger.info("📝 Historial obtenido: %s", conversation_history)
+    logger.info("📝 Historial obtenido: %d mensajes", len(conversation_history))
         
     return conversation_history
 
@@ -142,10 +159,8 @@ async def process_user_query(
     Returns:
         Dict con response, products y routing_decision
     """
-    # Obtener historial de conversación usando KapsoClient directamente
-    conversation_context = get_conversation_messages(user)
-    
-    logger.info("📝 Historial obtenido: %d mensajes", len(conversation_context))
+    # Obtener historial de conversación usando el cliente proporcionado (si existe)
+    conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
     
     routing = route_query(user_message)
     products = search_products(user_message)
