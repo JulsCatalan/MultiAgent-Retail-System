@@ -1,12 +1,8 @@
-from .utils import normalize_kapso_webhook, extract_message_ids_from_webhook, mark_whatsapp_messages_as_read_batch, mark_whatsapp_messages_as_read, disable_typing_indicator
+from .utils import normalize_kapso_webhook, extract_message_ids_from_webhook, mark_whatsapp_messages_as_read_batch
 from .message_deduplicator import message_deduplicator
 import logging
 from models import User, UserMetadata
-import os
-import asyncio
-from .data_loader import get_context_with_history
 from app.agents.process_user_query import process_user_query
-from app.models import AskRequest
 from .client import KapsoClient
 
 logger = logging.getLogger(__name__)
@@ -86,7 +82,7 @@ async def handle_response(data_list: list) -> dict:
     combined_message_parts = []
     message_ids = []
     
-    for i, data in enumerate(data_list, 1):
+    for data in data_list:
         message_data = data.get("message", {})
         msg_id = message_data.get("id", None)
         message_ids.append(msg_id)
@@ -119,32 +115,21 @@ async def handle_response(data_list: list) -> dict:
             metadata=UserMetadata(whatsapp_config_id=whatsapp_config_id, reached_from_phone_number=reached_from_phone_number)
         )
     
-    
-    agent_response = await process_user_query(user, combined_message)
-    
-    # # Ejecutar lógica del agente (síncrona) en un thread pool
-    # loop = asyncio.get_event_loop()
-    
-    # try:
-        
-    #     # Enviar respuesta vía KapsoClient (síncrono) en thread pool
-    #     def _send_replies():
-    #         with KapsoClient() as kapso:
-    #             # Enviar respuesta de texto
-    #             kapso.send_message(, agent_response.response)
-                
-    #             # Enviar detalles de productos si existen
-                
-        
-    #     await loop.run_in_executor(None, _send_replies)
-    #     logger.info("✅ Respuesta del agente enviada a conversación %s", whatsapp_conversation_id)
-        
-    # except Exception as e:
-        
-    #     return {"status": "error", "message": "Error ejecutando agente o enviando respuesta"}
-
-    return {
-        "status": "success",
-        "message": "Respuesta enviada",
-        "data": data_list
-    }
+    # Crear cliente de Kapso y pasarlo al agente para que envíe la respuesta
+    try:
+        with KapsoClient() as kapso_client:
+            agent_response = await process_user_query(user, combined_message, kapso_client=kapso_client)
+            
+            logger.info("✅ Respuesta del agente procesada y enviada a conversación %s", whatsapp_conversation_id)
+            
+            return {
+                "status": "success",
+                "message": "Respuesta enviada",
+                "agent_response": agent_response,
+                "data": data_list
+            }
+    except Exception as e:
+        logger.error("❌ Error ejecutando agente o enviando respuesta: %s", e)
+        import traceback
+        logger.error("Traceback: %s", traceback.format_exc())
+        return {"status": "error", "message": "Error ejecutando agente o enviando respuesta"}

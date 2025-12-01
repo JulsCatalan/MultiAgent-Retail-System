@@ -23,6 +23,8 @@ from .product_utils import (
     get_products_simple,
     search_products_vector
 )
+from app.agents.process_user_query import process_user_query
+from models import User, UserMetadata
 
 app = FastAPI(title="Fashion Store API", version="1.0.0")
 
@@ -49,6 +51,7 @@ def root():
             "checkout": "POST /create-checkout-session",
             "regenerate": "POST /regenerate-embeddings",
             "whatsapp": "POST /whatsapp",
+            "test-agent": "POST /test-agent - Prueba el agente sin WhatsApp",
             "health": "GET /health"
         }
     }
@@ -170,7 +173,68 @@ async def whatsapp_agent(request: Request):
     except Exception as e:
         logger.error(f"❌ Error en webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class TestAgentRequest(BaseModel):
+    """Request model para probar el agente"""
+    message: str
+    conversation_id: Optional[str] = "test-conversation-123"
+    phone_number: Optional[str] = "+1234567890"
+    user_name: Optional[str] = "Usuario de Prueba"
+
+
+@app.post("/test-agent")
+async def test_agent(request: TestAgentRequest):
+    """
+    Endpoint para probar el agente sin necesidad de WhatsApp.
     
+    Permite enviar un mensaje y recibir la respuesta del agente con productos
+    y decisiones de routing, simulando una conversación.
+    
+    Ejemplo de uso:
+    ```json
+    {
+        "message": "Busco camisetas rojas",
+        "conversation_id": "test-123",
+        "phone_number": "+1234567890",
+        "user_name": "Juan"
+    }
+    ```
+    """
+    try:
+        # Crear usuario de prueba
+        user = User(
+            name=request.user_name,
+            phone_number=request.phone_number,
+            conversation_id=request.conversation_id,
+            metadata=UserMetadata(
+                whatsapp_config_id="test-config",
+                reached_from_phone_number=request.phone_number
+            )
+        )
+        
+        logger.info("🧪 Probando agente con mensaje: %s", request.message)
+        
+        # Procesar query con el agente
+        result = await process_user_query(user, request.message)
+        
+        return {
+            "status": "success",
+            "user_message": request.message,
+            "agent_response": result["response"],
+            "products_found": len(result.get("products", [])),
+            "products": result.get("products", []),
+            "routing_decision": result.get("routing_decision"),
+            "conversation_history_count": len(result.get("conversation_history", [])),
+            "conversation_history": result.get("conversation_history", [])
+        }
+        
+    except Exception as e:
+        logger.error("❌ Error probando agente: %s", str(e))
+        import traceback
+        logger.error("Traceback: %s", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error probando agente: {str(e)}")
+
 
 class RegenerateRequest(BaseModel):
     password: str

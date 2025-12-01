@@ -1,6 +1,6 @@
 """Process user query and return response with products and routing decision"""
 import logging
-from typing import List
+from typing import List, Optional
 from .router import route_query
 from .retriever import search_products
 from .generator import generate_response
@@ -125,13 +125,19 @@ def _format_message_content(msg: dict, text: str, message_type: str, sender: str
             return f"[Mensaje tipo {message_type}]"
 
 
-async def process_user_query(user: User, user_message: str) -> dict:
+async def process_user_query(
+    user: User, 
+    user_message: str, 
+    kapso_client: Optional[KapsoClient] = None
+) -> dict:
     """
     Process user query and return response with products and routing decision.
     
     Args:
         user: Usuario con conversation_id y metadata
         user_message: Mensaje del usuario
+        kapso_client: Cliente de Kapso opcional. Si se proporciona, se enviará
+                     la respuesta del agente a través de Kapso.
         
     Returns:
         Dict con response, products y routing_decision
@@ -145,9 +151,26 @@ async def process_user_query(user: User, user_message: str) -> dict:
     products = search_products(user_message)
     response = generate_response(user_message, products)
     
+    # Enviar mensaje a través de Kapso si el cliente está disponible
+    message_sent = False
+    if kapso_client is not None and user.conversation_id:
+        try:
+            logger.info("📤 Enviando respuesta a conversación %s", user.conversation_id)
+            kapso_client.send_message(user.conversation_id, response)
+            message_sent = True
+            logger.info("✅ Mensaje enviado exitosamente")
+        except Exception as e:
+            logger.error("❌ Error enviando mensaje por Kapso: %s", e)
+    else:
+        if kapso_client is None:
+            logger.info("ℹ️ No se proporcionó cliente de Kapso, mensaje no enviado")
+        elif not user.conversation_id:
+            logger.warning("⚠️ Usuario sin conversation_id, mensaje no enviado")
+    
     return {
         "response": response,
         "products": products,
         "routing_decision": routing["decision"],
-        "conversation_history": conversation_context
+        "conversation_history": conversation_context,
+        "message_sent": message_sent
     }
