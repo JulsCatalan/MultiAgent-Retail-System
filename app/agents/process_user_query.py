@@ -2,6 +2,7 @@
 import logging
 from typing import List, Optional
 from .router import route_query
+from .query_builder import build_search_query
 from .retriever import search_products
 from .generator import generate_response
 from models import User, ConversationMessage
@@ -162,9 +163,21 @@ async def process_user_query(
     # Obtener historial de conversación usando el cliente proporcionado (si existe)
     conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
     
-    routing = route_query(user_message)
-    products = search_products(user_message)
-    response = generate_response(user_message, products)
+    # Pasar el contexto al router para que tome una mejor decisión
+    routing = route_query(user_message, conversation_context=conversation_context)
+    print("📝 Routing: %s", routing)
+    
+    # Si el routing es "general", generar respuesta sin buscar productos
+    if routing["decision"] == "general":
+        products = []
+        response = generate_response(user_message, products)
+    else:
+        # Si es "search", primero construir la query optimizada usando todo el contexto
+        optimized_query = build_search_query(user_message, conversation_context=conversation_context)
+        
+        # Luego buscar productos usando la query optimizada
+        products = search_products(optimized_query)
+        response = generate_response(user_message, products)
     
     # Enviar mensaje a través de Kapso si el cliente está disponible
     message_sent = False

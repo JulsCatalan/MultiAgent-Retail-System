@@ -2,6 +2,7 @@
 from openai import OpenAI
 import os
 import json
+from typing import Optional
 from ..db import get_connection
 from ..embeddings import embed_text
 import numpy as np
@@ -15,40 +16,21 @@ def cosine_similarity(a, b):
     """Calcula similitud coseno entre dos vectores"""
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-def search_products(user_message: str, top_k: int = 5, filters: dict = None) -> list:
+def search_products(
+    search_query: str, 
+    top_k: int = 5, 
+    filters: Optional[dict] = None
+) -> list:
     """
-    Retriever agent mejorado: Búsqueda híbrida (vectorial + filtros)
+    Retriever agent: Búsqueda híbrida (vectorial + filtros)
     
     Args:
-        user_message: Consulta del usuario
+        search_query: Query optimizada para búsqueda (ya procesada por query_builder)
         top_k: Número de productos a retornar
         filters: Filtros SQL opcionales (categoría, precio, color)
     """
     
-    # MEJORA 1: Mejor prompt de extracción - más específico
-    extraction_prompt = f"""Eres un asistente experto en moda. Extrae SOLO los atributos más importantes de esta búsqueda:
-
-Consulta del usuario: "{user_message}"
-
-Extrae:
-1. Tipo de producto (camisa, pantalón, zapatos, etc.)
-2. Color principal (si se menciona)
-3. Estilo/ocasión (casual, formal, deportivo, etc.)
-4. Características especiales (manga larga, con bolsillos, etc.)
-
-Responde en UNA frase corta y directa, enfocada en los atributos del producto.
-Ejemplo: "camisa formal manga larga color blanco"
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": extraction_prompt}],
-        max_tokens=100,  # Reducido para respuestas más concisas
-        temperature=0.1   # Más determinista
-    )
-    
-    search_query = response.choices[0].message.content.strip()
-    print("🔍 Query optimizada: %s", search_query)
+    print("🔍 Buscando productos con query: %s", search_query)
     
     # MEJORA 2: Generar embedding con mejor contexto
     # Agregar palabras clave de moda para mejorar la búsqueda
