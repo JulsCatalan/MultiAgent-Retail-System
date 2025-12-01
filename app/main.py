@@ -5,6 +5,9 @@ from typing import Optional, List
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -95,7 +98,7 @@ def get_products(
             total_pages=total_pages
         )
     except Exception as e:
-        print(f"❌ Error obteniendo productos: {str(e)}")
+        logger.error(f"❌ Error obteniendo productos: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/categories")
@@ -144,7 +147,7 @@ async def search(request: SearchRequest):
             total=len(products)
         )
     except Exception as e:
-        print(f"❌ Error en búsqueda: {str(e)}")
+        logger.error(f"❌ Error en búsqueda: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/whatsapp")
@@ -154,7 +157,7 @@ async def whatsapp_agent(request: Request):
     """
     try:
         webhook_data = await request.json()
-        print(f"🔍 Webhook recibido: {webhook_data}")
+        logger.info(f"🔍 Webhook recibido: {webhook_data}")
         result = await use_kapso(webhook_data)
         
         if result.get("status") == "success":
@@ -165,7 +168,7 @@ async def whatsapp_agent(request: Request):
                 detail=result.get("message", "Error procesando webhook")
             )
     except Exception as e:
-        print(f"❌ Error en webhook: {str(e)}")
+        logger.error(f"❌ Error en webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
 
@@ -187,7 +190,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         raise HTTPException(status_code=403, detail="Contraseña incorrecta")
     
     try:
-        print("🔄 Iniciando regeneración de embeddings...")
+        logger.info("🔄 Iniciando regeneración de embeddings...")
         
         # Borrar embeddings existentes
         conn = get_connection()
@@ -197,7 +200,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         conn.commit()
         
         deleted_count = cur.rowcount
-        print(f"🗑️  Embeddings borrados: {deleted_count}")
+        logger.info(f"🗑️  Embeddings borrados: {deleted_count}")
         
         conn.close()
         
@@ -208,7 +211,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         # Contar nuevos embeddings
         new_count = count_embeddings()
         
-        print(f"✅ Regeneración completada: {new_count} embeddings creados")
+        logger.info(f"✅ Regeneración completada: {new_count} embeddings creados")
         
         return {
             "status": "success",
@@ -218,5 +221,5 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         }
         
     except Exception as e:
-        print(f"❌ Error regenerando embeddings: {str(e)}")
+        logger.error(f"❌ Error regenerando embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
