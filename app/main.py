@@ -1,14 +1,9 @@
 # app/main.py
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-<<<<<<< HEAD
 from .db import init_db, count_embeddings
 from typing import Optional, List
 from pydantic import BaseModel
-=======
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
->>>>>>> 06550b9 (feat : web)
 from dotenv import load_dotenv
 import os
 import logging
@@ -191,19 +186,7 @@ async def search(request: SearchRequest):
             total=len(products)
         )
     except Exception as e:
-<<<<<<< HEAD
-        print(f"❌ Error en búsqueda: {str(e)}")
-=======
-        total_time = time.time() - start_time
-        
-        logger.error(
-            f"❌ [SEARCH] Error en búsqueda - "
-            f"Query: '{request.query[:50]}...', "
-            f"Error: {type(e).__name__}: {str(e)}, "
-            f"Tiempo: {total_time:.2f}s"
-        )
-        
->>>>>>> 06550b9 (feat : web)
+        logger.error(f"❌ Error en búsqueda: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/whatsapp")
@@ -275,11 +258,7 @@ async def test_agent(request: TestAgentRequest):
             )
         )
         
-<<<<<<< HEAD
-        print("🧪 Probando agente con mensaje: %s", request.message)
-=======
-        logger.debug(f"👤 Usuario de prueba creado: {user.name}")
->>>>>>> 06550b9 (feat : web)
+        logger.info("🧪 Probando agente con mensaje: %s", request.message)
         
         # Procesar query con el agente
         agent_start = time.time()
@@ -310,25 +289,9 @@ async def test_agent(request: TestAgentRequest):
         }
         
     except Exception as e:
-<<<<<<< HEAD
-        print("❌ Error probando agente: %s", str(e))
+        logger.error("❌ Error probando agente: %s", str(e))
         import traceback
-        print("Traceback: %s", traceback.format_exc())
-=======
-        total_time = time.time() - start_time
-        
-        logger.error(
-            "❌ [TEST-AGENT] Error procesando solicitud - "
-            f"Usuario: '{request.user_name}', "
-            f"Mensaje: '{request.message[:50]}...', "
-            f"Error: {type(e).__name__}: {str(e)}, "
-            f"Tiempo hasta error: {total_time:.2f}s"
-        )
-        
-        import traceback
-        logger.error("📍 Traceback completo:\n%s", traceback.format_exc())
-        
->>>>>>> 06550b9 (feat : web)
+        logger.error("Traceback: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error probando agente: {str(e)}")
 
 
@@ -381,11 +344,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         }
         
     except Exception as e:
-<<<<<<< HEAD
         print(f"❌ Error regenerando embeddings: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-=======
-        logger.error(f"❌ Error regenerando embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -561,4 +520,3 @@ async def test_agent_web(request: TestAgentWebRequest):
             detail=f"Error procesando solicitud del agente web: {str(e)}"
         )
 
->>>>>>> 06550b9 (feat : web)
