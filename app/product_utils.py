@@ -185,7 +185,7 @@ def search_products_vector(query: str, constraints: SearchConstraints, k: int = 
                     "similarity": similarity
                 })
             except (json.JSONDecodeError, ValueError, TypeError) as e:
-                logger.warning("Error procesando producto %s: %s", row[0], e)
+                print("Error procesando producto %s: %s", row[0], e)
                 continue
         
         conn.close()
@@ -194,11 +194,11 @@ def search_products_vector(query: str, constraints: SearchConstraints, k: int = 
         products_with_similarity.sort(key=lambda x: x["similarity"], reverse=True)
         products = [item["product"] for item in products_with_similarity[:k]]
         
-        logger.info("Búsqueda vectorial: %d productos encontrados para query '%s'", len(products), query)
+        print("Búsqueda vectorial: %d productos encontrados para query '%s'", len(products), query)
         
         return products
         
     except Exception as e:
-        logger.error("Error en búsqueda vectorial: %s", e)
+        print("Error en búsqueda vectorial: %s", e)
         return []
 

@@ -28,7 +28,7 @@ def get_conversation_messages(
         Lista de ConversationMessage ordenados por timestamp
     """
     if not user.conversation_id:
-        logger.warning("⚠️ No hay conversation_id para el usuario %s", user.name)
+        print("⚠️ No hay conversation_id para el usuario %s", user.name)
         return []
     
     conversation_history = []
@@ -49,7 +49,7 @@ def get_conversation_messages(
         messages = response.get("data", [])
         
         if not isinstance(messages, list):
-            logger.error("❌ Formato de mensajes inválido: %s", type(messages))
+            print("❌ Formato de mensajes inválido: %s", type(messages))
             return []
 
         for msg in messages:
@@ -83,23 +83,23 @@ def get_conversation_messages(
                     ))
                     
             except Exception as e:
-                logger.error("❌ Error procesando mensaje: %s", e)
+                print("❌ Error procesando mensaje: %s", e)
                 continue
         
         # Ordenar por timestamp (más antiguos primero)
         conversation_history.sort(key=lambda x: x.timestamp or "")
         
     except Exception as e:
-        logger.error("❌ Error obteniendo historial de Kapso: %s", e)
+        print("❌ Error obteniendo historial de Kapso: %s", e)
     finally:
         # Cerrar el cliente solo si lo creamos nosotros
         if should_close_client and kapso_client is not None:
             try:
                 kapso_client.close()
             except Exception as e:
-                logger.warning("⚠️ Error cerrando cliente de Kapso: %s", e)
+                print("⚠️ Error cerrando cliente de Kapso: %s", e)
     
-    logger.info("📝 Historial obtenido: %d mensajes", len(conversation_history))
+    print("📝 Historial obtenido: %d mensajes", len(conversation_history))
         
     return conversation_history
 
@@ -170,17 +170,17 @@ async def process_user_query(
     message_sent = False
     if kapso_client is not None and user.conversation_id:
         try:
-            logger.info("📤 Enviando respuesta a conversación %s", user.conversation_id)
+            print("📤 Enviando respuesta a conversación %s", user.conversation_id)
             kapso_client.send_message(user.conversation_id, response)
             message_sent = True
-            logger.info("✅ Mensaje enviado exitosamente")
+            print("✅ Mensaje enviado exitosamente")
         except Exception as e:
-            logger.error("❌ Error enviando mensaje por Kapso: %s", e)
+            print("❌ Error enviando mensaje por Kapso: %s", e)
     else:
         if kapso_client is None:
-            logger.info("ℹ️ No se proporcionó cliente de Kapso, mensaje no enviado")
+            print("ℹ️ No se proporcionó cliente de Kapso, mensaje no enviado")
         elif not user.conversation_id:
-            logger.warning("⚠️ Usuario sin conversation_id, mensaje no enviado")
+            print("⚠️ Usuario sin conversation_id, mensaje no enviado")
     
     return {
         "response": response,

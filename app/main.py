@@ -40,18 +40,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
-    logger.info("📦 Inicializando base de datos...")
+    print("📦 Inicializando base de datos...")
     init_db()
 
     existing = count_embeddings()
 
     if existing == 0:
-        logger.info("📤 No hay embeddings. Cargando datos y generando embeddings...")
+        print("📤 No hay embeddings. Cargando datos y generando embeddings...")
         csv_path = "app/data/products.csv"
         load_products_to_db(csv_path)
-        logger.info("✅ Datos cargados correctamente.")
+        print("✅ Datos cargados correctamente.")
     else:
-        logger.info("🔍 Embeddings existentes detectados: %s. No se recargarán datos.", existing)
+        print("🔍 Embeddings existentes detectados: %s. No se recargarán datos.", existing)
 
 # ==================== ENDPOINTS ====================
 
@@ -117,7 +117,7 @@ def get_products(
             total_pages=total_pages
         )
     except Exception as e:
-        logger.error(f"❌ Error obteniendo productos: {str(e)}")
+        print(f"❌ Error obteniendo productos: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/categories")
@@ -166,7 +166,7 @@ async def search(request: SearchRequest):
             total=len(products)
         )
     except Exception as e:
-        logger.error(f"❌ Error en búsqueda: {str(e)}")
+        print(f"❌ Error en búsqueda: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/whatsapp")
@@ -187,7 +187,7 @@ async def whatsapp_agent(request: Request):
                 detail=result.get("message", "Error procesando webhook")
             )
     except Exception as e:
-        logger.error(f"❌ Error en webhook: {str(e)}")
+        print(f"❌ Error en webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -229,7 +229,7 @@ async def test_agent(request: TestAgentRequest):
             )
         )
         
-        logger.info("🧪 Probando agente con mensaje: %s", request.message)
+        print("🧪 Probando agente con mensaje: %s", request.message)
         
         # Procesar query con el agente
         result = await process_user_query(user, request.message)
@@ -246,9 +246,9 @@ async def test_agent(request: TestAgentRequest):
         }
         
     except Exception as e:
-        logger.error("❌ Error probando agente: %s", str(e))
+        print("❌ Error probando agente: %s", str(e))
         import traceback
-        logger.error("Traceback: %s", traceback.format_exc())
+        print("Traceback: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error probando agente: {str(e)}")
 
 
@@ -270,7 +270,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         raise HTTPException(status_code=403, detail="Contraseña incorrecta")
     
     try:
-        logger.info("🔄 Iniciando regeneración de embeddings...")
+        print("🔄 Iniciando regeneración de embeddings...")
         
         # Borrar embeddings existentes
         conn = get_connection()
@@ -280,7 +280,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         conn.commit()
         
         deleted_count = cur.rowcount
-        logger.info(f"🗑️  Embeddings borrados: {deleted_count}")
+        print(f"🗑️  Embeddings borrados: {deleted_count}")
         
         conn.close()
         
@@ -291,7 +291,7 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         # Contar nuevos embeddings
         new_count = count_embeddings()
         
-        logger.info(f"✅ Regeneración completada: {new_count} embeddings creados")
+        print(f"✅ Regeneración completada: {new_count} embeddings creados")
         
         return {
             "status": "success",
@@ -301,5 +301,5 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         }
         
     except Exception as e:
-        logger.error(f"❌ Error regenerando embeddings: {str(e)}")
+        print(f"❌ Error regenerando embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

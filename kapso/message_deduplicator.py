@@ -61,11 +61,9 @@ class MessageDeduplicator:
                 if internal_id:
                     message_ids.append(f"kapso:{internal_id}")
             
-            logger.debug(f"🔍 IDs extraídos del webhook: {message_ids}")
             return message_ids
             
-        except Exception as e:
-            logger.error(f"❌ Error extrayendo IDs de mensaje: {e}")
+        except Exception:
             return []
     
     def are_messages_already_processed(self, message_ids: List[str]) -> bool:

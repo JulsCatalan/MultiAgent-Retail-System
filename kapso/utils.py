@@ -43,12 +43,12 @@ def normalize_kapso_webhook(webhook_data: Dict[str, Any]) -> List[Dict[str, Any]
         ]
     """
     if not webhook_data:
-        logger.warning("⚠️ webhook_data vacío")
+        print("⚠️ webhook_data vacío")
         return []
     
     data_list = webhook_data.get("data", [])
     if not data_list:
-        logger.warning("⚠️ No hay 'data' en webhook_data")
+        print("⚠️ No hay 'data' en webhook_data")
         return []
     
     normalized_list = []
@@ -123,7 +123,7 @@ def normalize_kapso_webhook(webhook_data: Dict[str, Any]) -> List[Dict[str, Any]
         
         normalized_list.append(normalized_item)
     
-    logger.info("✅ Webhook normalizado: %d mensaje(s) procesado(s)", len(normalized_list))
+    print("✅ Webhook normalizado: %d mensaje(s) procesado(s)", len(normalized_list))
     return normalized_list
 
 
@@ -174,7 +174,7 @@ async def mark_whatsapp_message_as_read_single(
         response_data = await loop.run_in_executor(_thread_pool, _sync_mark)
         
         if "error" not in response_data:
-            logger.debug("✅ Mensaje %s marcado como leído exitosamente", message_id)
+            print("✅ Mensaje %s marcado como leído exitosamente", message_id)
             return {
                 "success": True,
                 "message_id": message_id,
@@ -182,7 +182,7 @@ async def mark_whatsapp_message_as_read_single(
                 "data": response_data
             }
         else:
-            logger.warning("⚠️ Error marcando mensaje %s como leído: %s", message_id, response_data.get("status_code"))
+            print("⚠️ Error marcando mensaje %s como leído: %s", message_id, response_data.get("status_code"))
             return {
                 "success": False,
                 "message_id": message_id,
@@ -192,7 +192,7 @@ async def mark_whatsapp_message_as_read_single(
             }
                     
     except Exception as e:
-        logger.error("❌ Error marcando mensaje %s como leído: %s", message_id, e)
+        print("❌ Error marcando mensaje %s como leído: %s", message_id, e)
         return {
             "success": False,
             "message_id": message_id,
@@ -227,14 +227,14 @@ async def mark_whatsapp_messages_as_read_batch(
     valid_message_ids = [msg_id for msg_id in message_ids if msg_id and msg_id.strip()]
     
     if not valid_message_ids:
-        logger.warning("⚠️ Todos los message_ids están vacíos o son inválidos")
+        print("⚠️ Todos los message_ids están vacíos o son inválidos")
         return {
             "success": False,
             "message": "Todos los message_ids son inválidos",
             "results": []
         }
     
-    logger.info("📖 Marcando %d mensajes como leídos (background: %s)", len(valid_message_ids), background_processing)
+    print("📖 Marcando %d mensajes como leídos (background: %s)", len(valid_message_ids), background_processing)
     
     try:
         if background_processing:
@@ -268,7 +268,7 @@ async def mark_whatsapp_messages_as_read_batch(
             }
             
     except Exception as e:
-        logger.error("❌ Error en batch marking: %s", e)
+        print("❌ Error en batch marking: %s", e)
         return {
             "success": False,
             "message": f"Error procesando mensajes: {str(e)}",
@@ -280,9 +280,9 @@ async def _mark_messages_background(message_ids: List[str], enable_typing_on_las
     try:
         results = await _mark_messages_foreground(message_ids, enable_typing_on_last)
         success_count = sum(1 for r in results if r.get("success"))
-        logger.info("🔄 Background processing completado: %d/%d mensajes marcados", success_count, len(message_ids))
+        
     except Exception as e:
-        logger.error("❌ Error en background processing: %s", e)
+        print("❌ Error en background processing: %s", e)
 
 async def _mark_messages_foreground(message_ids: List[str], enable_typing_on_last: bool) -> List[Dict[str, Any]]:
     """Función helper para procesar mensajes en foreground"""
@@ -330,14 +330,14 @@ async def disable_typing_indicator(conversation_id: str) -> Dict[str, Any]:
         response_data = await loop.run_in_executor(_thread_pool, _sync_disable_typing)
         
         if response_data.get("success"):
-            logger.debug("✅ Typing indicator desactivado para conversación %s", conversation_id)
+            
             return {
                 "success": True,
                 "conversation_id": conversation_id,
                 "message": "Typing indicator desactivado"
             }
         else:
-            logger.debug("⚠️ No se pudo desactivar typing indicator: %s", response_data.get("status_code"))
+            print("⚠️ No se pudo desactivar typing indicator: %s", response_data.get("status_code"))
             return {
                 "success": False,
                 "conversation_id": conversation_id,
@@ -346,7 +346,7 @@ async def disable_typing_indicator(conversation_id: str) -> Dict[str, Any]:
             }
                     
     except Exception as e:
-        logger.debug("⚠️ Error desactivando typing indicator: %s", e)
+        print("⚠️ Error desactivando typing indicator: %s", e)
         return {
             "success": False,
             "conversation_id": conversation_id,
@@ -387,4 +387,4 @@ def mark_whatsapp_messages_as_read(message_ids: List[str]):
                 background_processing=True
             ))
     except Exception as e:
-        logger.error("❌ Error iniciando background marking: %s", e)
+        print("❌ Error iniciando background marking: %s", e)

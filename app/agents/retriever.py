@@ -48,7 +48,7 @@ Ejemplo: "camisa formal manga larga color blanco"
     )
     
     search_query = response.choices[0].message.content.strip()
-    logger.info("🔍 Query optimizada: %s", search_query)
+    print("🔍 Query optimizada: %s", search_query)
     
     # MEJORA 2: Generar embedding con mejor contexto
     # Agregar palabras clave de moda para mejorar la búsqueda
@@ -120,7 +120,7 @@ Ejemplo: "camisa formal manga larga color blanco"
     conn.close()
     
     if not embeddings_matrix:
-        logger.warning("⚠️ No se encontraron productos con embeddings")
+        print("⚠️ No se encontraron productos con embeddings")
         return []
     
     # Cálculo vectorizado (mucho más rápido)
@@ -159,8 +159,8 @@ Ejemplo: "camisa formal manga larga color blanco"
     products = [p for p in products if p['similarity'] >= min_similarity]
     
     if not products:
-        logger.warning("⚠️ No se encontraron productos con suficiente similitud")
+        print("⚠️ No se encontraron productos con suficiente similitud")
     else:
-        logger.info("✅ Top producto: %s (similitud: %s)", products[0]['prod_name'], products[0]['similarity'])
+        print("✅ Top producto: %s (similitud: %s)", products[0]['prod_name'], products[0]['similarity'])
     
     return products[:top_k]

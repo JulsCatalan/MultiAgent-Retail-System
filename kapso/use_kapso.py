@@ -14,13 +14,13 @@ async def use_kapso(webhook_data: dict):
     try:
         webhook_type = webhook_data.get("type", "unknown")
         
-        logger.info("🔍 Webhook recibido de Kapso - Tipo: %s", webhook_type)
+        print("🔍 Webhook recibido de Kapso - Tipo: %s", webhook_type)
         
         if webhook_type == "whatsapp.message.received":
             data_list = normalize_kapso_webhook(webhook_data)
             
             if not data_list:
-                logger.warning("⚠️ No se pudo normalizar el webhook o está vacío")
+                print("⚠️ No se pudo normalizar el webhook o está vacío")
                 return {
                     "status": "success",
                     "message": "Webhook sin datos válidos",
@@ -32,7 +32,7 @@ async def use_kapso(webhook_data: dict):
             
             
             if message_ids and message_deduplicator.are_messages_already_processed(message_ids):
-                logger.warning("⚠️ Mensaje DUPLICADO detectado y descartado: %s", message_ids)
+                print("⚠️ Mensaje DUPLICADO detectado y descartado: %s", message_ids)
                 return {
                     "status": "success",
                     "message": "Webhook duplicado - mensajes ya procesados",
@@ -49,9 +49,9 @@ async def use_kapso(webhook_data: dict):
             return result
 
     except Exception as e:
-        logger.error("❌ Error procesando webhook de Kapso: %s: %s", type(e).__name__, str(e))
-        import traceback
-        logger.error("❌ Traceback: %s", traceback.format_exc())
+        print("❌ Error procesando webhook de Kapso: %s: %s", type(e).__name__, str(e))
+        
+        
         return {"status": "error", "message": "Error interno del servidor"}
 
 async def handle_response(data_list: list) -> dict:
@@ -106,7 +106,7 @@ async def handle_response(data_list: list) -> dict:
     try:
         await mark_whatsapp_messages_as_read_batch(message_ids, enable_typing_on_last=True, background_processing=False)
     except Exception as e:
-        logger.error("❌ Error marcando mensajes como leídos: %s", e)
+        print("❌ Error marcando mensajes como leídos: %s", e)
         
     user = User(
             name=contact_name,
@@ -129,7 +129,7 @@ async def handle_response(data_list: list) -> dict:
                 "data": data_list
             }
     except Exception as e:
-        logger.error("❌ Error ejecutando agente o enviando respuesta: %s", e)
+        print("❌ Error ejecutando agente o enviando respuesta: %s", e)
         import traceback
-        logger.error("Traceback: %s", traceback.format_exc())
+        print("Traceback: %s", traceback.format_exc())
         return {"status": "error", "message": "Error ejecutando agente o enviando respuesta"}

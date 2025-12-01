@@ -216,9 +216,9 @@ class KapsoClient:
         # Log response for debugging
         try:
             response_json = response.json()
-            logger.info("DEBUG: Send message response: %s", response_json)
+            print("DEBUG: Send message response: %s", response_json)
         except Exception as e:
-            logger.error("DEBUG: Could not parse response JSON: %s", e)
+            print("DEBUG: Could not parse response JSON: %s", e)
         
         response.raise_for_status()
         return response_json
