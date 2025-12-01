@@ -1,12 +1,18 @@
 # app/main.py
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+<<<<<<< HEAD
 from .db import init_db, count_embeddings
 from typing import Optional, List
 from pydantic import BaseModel
+=======
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+>>>>>>> 06550b9 (feat : web)
 from dotenv import load_dotenv
 import os
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +31,8 @@ from .product_utils import (
     search_products_vector
 )
 from app.agents.process_user_query import process_user_query
-from models import User, UserMetadata
+from models import User, UserMetadata, ConversationMessage
+from app.models import Constraints
 
 app = FastAPI(title="Fashion Store API", version="1.0.0")
 
@@ -66,8 +73,9 @@ def root():
             "search": "POST /search - Búsqueda vectorial (para WhatsApp)",
             "checkout": "POST /create-checkout-session",
             "regenerate": "POST /regenerate-embeddings",
-            "whatsapp": "POST /whatsapp",
+            "whatsapp": "POST /whatsapp - Webhook de WhatsApp",
             "test-agent": "POST /test-agent - Prueba el agente sin WhatsApp",
+            "test-agent-web": "POST /test-agent-web - Agente para frontend web con contexto",
             "health": "GET /health"
         }
     }
@@ -154,6 +162,15 @@ async def search(request: SearchRequest):
     """
     Búsqueda vectorial de productos (usado por WhatsApp)
     """
+    start_time = time.time()
+    
+    logger.info(
+        "🔍 [SEARCH] Nueva búsqueda - "
+        f"Query: '{request.query[:100]}{'...' if len(request.query) > 100 else ''}', "
+        f"K: {request.k}, "
+        f"Filtros: {dict((k, v) for k, v in request.constraints.dict().items() if v is not None)}"
+    )
+    
     try:
         products = search_products_vector(
             request.query,
@@ -161,12 +178,32 @@ async def search(request: SearchRequest):
             request.k
         )
         
+        total_time = time.time() - start_time
+        
+        logger.info(
+            f"✅ [SEARCH] Búsqueda completada - "
+            f"Productos encontrados: {len(products)}, "
+            f"Tiempo: {total_time:.2f}s"
+        )
+        
         return SearchResponse(
             items=products,
             total=len(products)
         )
     except Exception as e:
+<<<<<<< HEAD
         print(f"❌ Error en búsqueda: {str(e)}")
+=======
+        total_time = time.time() - start_time
+        
+        logger.error(
+            f"❌ [SEARCH] Error en búsqueda - "
+            f"Query: '{request.query[:50]}...', "
+            f"Error: {type(e).__name__}: {str(e)}, "
+            f"Tiempo: {total_time:.2f}s"
+        )
+        
+>>>>>>> 06550b9 (feat : web)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/whatsapp")
@@ -217,6 +254,15 @@ async def test_agent(request: TestAgentRequest):
     }
     ```
     """
+    start_time = time.time()
+    
+    logger.info(
+        "🧪 [TEST-AGENT] Nueva solicitud - "
+        f"Usuario: '{request.user_name}', "
+        f"Mensaje: '{request.message[:100]}{'...' if len(request.message) > 100 else ''}', "
+        f"ConvID: {request.conversation_id}"
+    )
+    
     try:
         # Crear usuario de prueba
         user = User(
@@ -229,10 +275,28 @@ async def test_agent(request: TestAgentRequest):
             )
         )
         
+<<<<<<< HEAD
         print("🧪 Probando agente con mensaje: %s", request.message)
+=======
+        logger.debug(f"👤 Usuario de prueba creado: {user.name}")
+>>>>>>> 06550b9 (feat : web)
         
         # Procesar query con el agente
+        agent_start = time.time()
         result = await process_user_query(user, request.message)
+        agent_time = time.time() - agent_start
+        
+        logger.info(f"🤖 Agente procesado en {agent_time:.2f}s")
+        
+        total_time = time.time() - start_time
+        
+        logger.info(
+            "✅ [TEST-AGENT] Solicitud completada - "
+            f"Usuario: '{request.user_name}', "
+            f"Productos: {len(result.get('products', []))}, "
+            f"Decisión: '{result.get('routing_decision', 'unknown')}', "
+            f"Tiempo total: {total_time:.2f}s"
+        )
         
         return {
             "status": "success",
@@ -246,9 +310,25 @@ async def test_agent(request: TestAgentRequest):
         }
         
     except Exception as e:
+<<<<<<< HEAD
         print("❌ Error probando agente: %s", str(e))
         import traceback
         print("Traceback: %s", traceback.format_exc())
+=======
+        total_time = time.time() - start_time
+        
+        logger.error(
+            "❌ [TEST-AGENT] Error procesando solicitud - "
+            f"Usuario: '{request.user_name}', "
+            f"Mensaje: '{request.message[:50]}...', "
+            f"Error: {type(e).__name__}: {str(e)}, "
+            f"Tiempo hasta error: {total_time:.2f}s"
+        )
+        
+        import traceback
+        logger.error("📍 Traceback completo:\n%s", traceback.format_exc())
+        
+>>>>>>> 06550b9 (feat : web)
         raise HTTPException(status_code=500, detail=f"Error probando agente: {str(e)}")
 
 
@@ -301,5 +381,184 @@ async def regenerate_embeddings(password: str = Query(..., alias="ADMIN_PASSWORD
         }
         
     except Exception as e:
+<<<<<<< HEAD
         print(f"❌ Error regenerando embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+=======
+        logger.error(f"❌ Error regenerando embeddings: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class WebContext(BaseModel):
+    """Contexto de conversación para el frontend web"""
+    history: List[ConversationMessage] = Field(default_factory=list)
+    current_constraints: Optional[Constraints] = None
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class TestAgentWebRequest(BaseModel):
+    """Request model para el agente web con contexto"""
+    message: str
+    user_name: Optional[str] = "Usuario Web"
+    conversation_id: Optional[str] = None
+    context: Optional[WebContext] = None
+
+class TestAgentWebResponse(BaseModel):
+    """Response model para el agente web"""
+    status: str
+    message: str
+    agent_response: str
+    products: List[Product]  # Reusing existing Product model from schemas
+    products_found: int
+    routing_decision: str
+    conversation_history: List[ConversationMessage]
+
+@app.post("/test-agent-web", response_model=TestAgentWebResponse)
+async def test_agent_web(request: TestAgentWebRequest):
+    start_time = time.time()
+    
+    # Log incoming request
+    logger.info(
+        "🌐 [WEB-AGENT] Nueva solicitud - "
+        f"Usuario: '{request.user_name}', "
+        f"Mensaje: '{request.message[:100]}{'...' if len(request.message) > 100 else ''}', "
+        f"ConvID: {request.conversation_id or 'nuevo'}, "
+        f"Historial: {len(request.context.history) if request.context and request.context.history else 0} mensajes"
+    )
+    
+    try:
+        # Generar conversation_id único si no se proporciona
+        if not request.conversation_id:
+            import uuid
+            request.conversation_id = f"web-{uuid.uuid4().hex[:12]}"
+            logger.debug(f"🆔 Conversation ID generado: {request.conversation_id}")
+        
+        # Crear usuario web
+        user = User(
+            name=request.user_name,
+            phone_number=None,
+            conversation_id=request.conversation_id,
+            metadata=UserMetadata(
+                whatsapp_config_id="web-app",
+                reached_from_phone_number="web"
+            )
+        )
+        
+        logger.debug(f"👤 Usuario creado: {user.name} (ConvID: {user.conversation_id})")
+        
+        # Procesar query con el agente (sin cliente Kapso)
+        agent_start = time.time()
+        result = await process_user_query(user, request.message, kapso_client=None)
+        agent_time = time.time() - agent_start
+        
+        logger.info(
+            f"🤖 Agente procesado en {agent_time:.2f}s - "
+            f"Decisión: {result.get('routing_decision', 'unknown')}"
+        )
+        
+        # Convertir productos del retriever al modelo Product existente
+        products_web = []
+        conversion_errors = 0
+        
+        for idx, product in enumerate(result.get("products", [])):
+            try:
+                # Convert article_id to int for Product model
+                try:
+                    product_id = int(product.get("article_id", 0))
+                except (ValueError, TypeError):
+                    # If conversion fails, use hash as fallback
+                    product_id = abs(hash(product.get("article_id", ""))) % (10 ** 9)
+                    logger.debug(f"⚠️ ArticleID no numérico convertido a hash: {product.get('article_id')} → {product_id}")
+                
+                products_web.append(Product(
+                    id=product_id,
+                    name=product.get("prod_name", ""),
+                    brand=product.get("product_type_name", "Fashion Store"),
+                    category=product.get("product_group_name", "General"),
+                    price=product.get("price_mxn", 0.0),
+                    image=product.get("image_url", ""),
+                    description=product.get("detail_desc"),
+                    color=product.get("colour_group_name"),
+                    type=product.get("product_type_name")
+                ))
+            except Exception as e:
+                conversion_errors += 1
+                logger.warning(f"❌ Error convirtiendo producto {idx}: {str(e)}")
+        
+        if conversion_errors > 0:
+            logger.warning(f"⚠️ {conversion_errors} producto(s) no pudieron ser convertidos")
+        
+        logger.info(f"📦 Productos convertidos: {len(products_web)}/{len(result.get('products', []))}")
+        
+        # Construir historial actualizado
+        conversation_history = []
+        
+        # Agregar historial anterior si existe
+        if request.context and request.context.history:
+            conversation_history.extend(request.context.history)
+            logger.debug(f"📚 Historial anterior cargado: {len(request.context.history)} mensajes")
+        
+        # Agregar el mensaje del usuario actual
+        from datetime import datetime
+        current_timestamp = datetime.utcnow().isoformat() + "Z"
+        
+        conversation_history.append(ConversationMessage(
+            timestamp=current_timestamp,
+            sender="client",
+            message=request.message,
+            message_id=f"{request.conversation_id}-{len(conversation_history)}"
+        ))
+        
+        # Agregar la respuesta del agente
+        conversation_history.append(ConversationMessage(
+            timestamp=current_timestamp,
+            sender="cedamoney",
+            message=result["response"],
+            message_id=f"{request.conversation_id}-{len(conversation_history)}"
+        ))
+        
+        logger.debug(f"💬 Historial actualizado: {len(conversation_history)} mensajes totales")
+        
+        # Calculate total request time
+        total_time = time.time() - start_time
+        
+        logger.info(
+            "✅ [WEB-AGENT] Solicitud completada exitosamente - "
+            f"Usuario: '{request.user_name}', "
+            f"ConvID: {request.conversation_id}, "
+            f"Productos: {len(products_web)}, "
+            f"Decisión: '{result.get('routing_decision', 'unknown')}', "
+            f"Respuesta: {len(result['response'])} caracteres, "
+            f"Tiempo total: {total_time:.2f}s (Agente: {agent_time:.2f}s)"
+        )
+        
+        return TestAgentWebResponse(
+            status="success",
+            message="Respuesta generada exitosamente",
+            agent_response=result["response"],
+            products=products_web,
+            products_found=len(products_web),
+            routing_decision=result.get("routing_decision", "general"),
+            conversation_history=conversation_history
+        )
+        
+    except Exception as e:
+        total_time = time.time() - start_time
+        
+        logger.error(
+            "❌ [WEB-AGENT] Error procesando solicitud - "
+            f"Usuario: '{request.user_name}', "
+            f"ConvID: {request.conversation_id or 'nuevo'}, "
+            f"Mensaje: '{request.message[:50]}...', "
+            f"Error: {type(e).__name__}: {str(e)}, "
+            f"Tiempo hasta error: {total_time:.2f}s"
+        )
+        
+        import traceback
+        logger.error("📍 Traceback completo:\n%s", traceback.format_exc())
+        
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error procesando solicitud del agente web: {str(e)}"
+        )
+
+>>>>>>> 06550b9 (feat : web)
