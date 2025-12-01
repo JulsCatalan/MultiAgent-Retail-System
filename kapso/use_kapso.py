@@ -12,6 +12,10 @@ async def use_kapso(webhook_data: dict):
     Procesa webhooks de Kapso para manejar mensajes entrantes de WhatsApp
     """
     try:
+        if not webhook_data or not isinstance(webhook_data, dict):
+            print("❌ webhook_data inválido o None")
+            return {"status": "error", "message": "webhook_data inválido"}
+        
         webhook_type = webhook_data.get("type", "unknown")
         
         print("🔍 Webhook recibido de Kapso - Tipo: %s", webhook_type)
@@ -58,9 +62,22 @@ async def handle_response(data_list: list) -> dict:
     """
     Maneja la respuesta del agente usando KapsoClient
     """
+    if not data_list or len(data_list) == 0:
+        return {"status": "error", "message": "data_list está vacío"}
+    
     first_data = data_list[0]
-    conversation = first_data.get("conversation", {})
-    reached_from_phone_number = first_data.get("whatsapp_config", {}).get("display_phone_number_normalized")
+    if not first_data or not isinstance(first_data, dict):
+        return {"status": "error", "message": "first_data inválido"}
+    
+    conversation = first_data.get("conversation") or {}
+    if not isinstance(conversation, dict):
+        conversation = {}
+    
+    whatsapp_config = first_data.get("whatsapp_config")
+    if not isinstance(whatsapp_config, dict):
+        whatsapp_config = {}
+    
+    reached_from_phone_number = whatsapp_config.get("display_phone_number_normalized")
     
     # NO MOVER ESTO PUES ESTAMOS USANDO SANDBOX
     if (reached_from_phone_number is None):
@@ -83,11 +100,18 @@ async def handle_response(data_list: list) -> dict:
     message_ids = []
     
     for data in data_list:
-        message_data = data.get("message", {})
+        if not data or not isinstance(data, dict):
+            continue
+            
+        message_data = data.get("message")
+        if not isinstance(message_data, dict):
+            message_data = {}
+            
         msg_id = message_data.get("id", None)
-        message_ids.append(msg_id)
+        if msg_id:
+            message_ids.append(msg_id)
         
-        message_type = message_data.get("message_type", "").lower()
+        message_type = message_data.get("message_type", "").lower() if isinstance(message_data.get("message_type"), str) else ""
         message_content_raw = message_data.get("content", "")
         message_content = message_content_raw.strip() if message_content_raw else ""
         
