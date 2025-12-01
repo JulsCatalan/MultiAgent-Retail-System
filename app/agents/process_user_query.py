@@ -148,7 +148,8 @@ def _format_message_content(msg: dict, text: str, message_type: str, sender: str
 async def process_user_query(
     user: User, 
     user_message: str, 
-    kapso_client: Optional[KapsoClient] = None
+    kapso_client: Optional[KapsoClient] = None,
+    conversation_context: Optional[List[ConversationMessage]] = None
 ) -> dict:
     """
     Process user query and return response with products and routing decision.
@@ -158,12 +159,15 @@ async def process_user_query(
         user_message: Mensaje del usuario
         kapso_client: Cliente de Kapso opcional. Si se proporciona, se enviará
                      la respuesta del agente a través de Kapso.
+        conversation_context: Contexto de conversación opcional. Si se proporciona,
+                             se usa este en lugar de obtenerlo de Kapso.
         
     Returns:
         Dict con response, products y routing_decision
     """
-    # Obtener historial de conversación usando el cliente proporcionado (si existe)
-    conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
+    # Obtener historial de conversación: usar el proporcionado o obtenerlo de Kapso
+    if conversation_context is None:
+        conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
 
     # 1) Revisar si el mensaje es sobre el carrito (ver carrito, agregar algo, etc.)
     if user.conversation_id:

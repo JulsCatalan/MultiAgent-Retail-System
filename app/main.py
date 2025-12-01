@@ -404,9 +404,20 @@ async def test_agent_web(request: TestAgentWebRequest):
         
         logger.debug(f"👤 Usuario creado: {user.name} (ConvID: {user.conversation_id})")
         
-        # Procesar query con el agente (sin cliente Kapso)
+        # Preparar contexto de conversación desde el request si existe
+        conversation_context = None
+        if request.context and request.context.history:
+            conversation_context = request.context.history
+            logger.debug(f"📚 Contexto de conversación proporcionado: {len(conversation_context)} mensajes")
+        
+        # Procesar query con el agente (sin cliente Kapso, pero con contexto si está disponible)
         agent_start = time.time()
-        result = await process_user_query(user, request.message, kapso_client=None)
+        result = await process_user_query(
+            user, 
+            request.message, 
+            kapso_client=None,
+            conversation_context=conversation_context
+        )
         agent_time = time.time() - agent_start
         
         logger.info(
@@ -448,15 +459,10 @@ async def test_agent_web(request: TestAgentWebRequest):
         
         logger.info(f"📦 Productos convertidos: {len(products_web)}/{len(result.get('products', []))}")
         
-        # Construir historial actualizado
-        conversation_history = []
+        # Construir historial actualizado usando el historial que devolvió el agente
+        conversation_history = result.get("conversation_history", [])
         
-        # Agregar historial anterior si existe
-        if request.context and request.context.history:
-            conversation_history.extend(request.context.history)
-            logger.debug(f"📚 Historial anterior cargado: {len(request.context.history)} mensajes")
-        
-        # Agregar el mensaje del usuario actual
+        # Agregar el mensaje del usuario actual y la respuesta del agente
         from datetime import datetime
         current_timestamp = datetime.utcnow().isoformat() + "Z"
         
@@ -467,7 +473,6 @@ async def test_agent_web(request: TestAgentWebRequest):
             message_id=f"{request.conversation_id}-{len(conversation_history)}"
         ))
         
-        # Agregar la respuesta del agente
         conversation_history.append(ConversationMessage(
             timestamp=current_timestamp,
             sender="cedamoney",
