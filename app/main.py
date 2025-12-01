@@ -154,6 +154,7 @@ async def whatsapp_agent(request: Request):
     """
     try:
         webhook_data = await request.json()
+        print(f"🔍 Webhook recibido: {webhook_data}")
         result = await use_kapso(webhook_data)
         
         if result.get("status") == "success":
