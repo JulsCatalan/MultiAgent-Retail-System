@@ -697,10 +697,10 @@ def handle_cart_interaction(
         response = "🛒 *TU CARRITO ACTUAL*\n\nEstos son los productos en tu carrito:"
         
         # Return cart items for image display
-            return {
-                "handled": True,
+        return {
+            "handled": True, 
             "response": response, 
-                "products": [],
+            "products": [],
             "send_images": True,
             "image_type": "cart",
             "cart_items": display_items,
@@ -770,11 +770,11 @@ def handle_cart_interaction(
         
         # NOTE: Cart is NOT cleared here - it stays until payment is confirmed
         # This allows the user to go back and modify the cart
-                
-                return {
-                    "handled": True,
+        
+        return {
+            "handled": True,
             "response": response, 
-                    "products": [],
+            "products": [],
             "send_images": True,
             "image_type": "checkout",
             "cart_items": display_items,
@@ -941,8 +941,8 @@ def handle_cart_interaction(
                     )
             
             affected_text = "\n".join(affected_items) if affected_items else removal_result.get("description", "productos")
-        
-        response = (
+            
+            response = (
                 f"⚠️ Voy a realizar estos cambios en tu carrito:\n\n"
                 f"{affected_text}\n\n"
                 f"¿Confirmas que quieres hacer esto?\n"
@@ -1042,30 +1042,31 @@ def handle_cart_interaction(
                 )
 
                 if not search_query:
-                max_idx = max(p["position"] for p in recent) if recent else 0
-                products_list = []
-                for p in recent[:5]:
-                    products_list.append(
-                        f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
-                    )
-                products_text = ", ".join(products_list)
-                
-                return {
-                    "handled": True,
-                    "response": (
+                    max_idx = max(p["position"] for p in recent) if recent else 0
+                    products_list = []
+                    for p in recent[:5]:
+                        products_list.append(
+                            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
+                        )
+                    products_text = ", ".join(products_list)
+                    
+                    return {
+                        "handled": True,
+                        "response": (
                             "No pude identificar exactamente qué producto quieres agregar. "
-                        f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
-                        "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
-                        f"Productos disponibles: {products_text}"
-                    ),
-                    "products": [],
+                            f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
+                            "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
+                            f"Productos disponibles: {products_text}"
+                        ),
+                        "products": [],
                         "send_images": False,
                     }
 
                 # Buscar en el catálogo: esto SOLO devuelve productos que realmente existen
                 catalog_products = search_products(search_query)
 
-                if not catalog_products:    
+                if not catalog_products:
+                    # No match found - stop looking and inform user
                     return {
                         "handled": True,
                         "response": (
