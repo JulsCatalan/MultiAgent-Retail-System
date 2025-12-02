@@ -729,3 +729,86 @@ def format_checkout_message_simple(total: float, checkout_url: str) -> str:
         f"⏰ Este link es válido por 24 horas\n\n"
         f"_Si deseas modificar tu carrito, dime \"seguir comprando\" o \"modificar carrito\"._"
     )
+
+# app/db.py - Agregar estas funciones al final del archivo
+
+def get_cart_items(cart_id: int) -> list:
+    """
+    Obtiene todos los items del carrito con su información completa
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT 
+            ci.id,
+            ci.cart_id,
+            ci.article_id,
+            ci.quantity,
+            p.prod_name,
+            p.product_type_name,
+            p.colour_group_name,
+            p.price_mxn,
+            p.image_url,
+            (p.price_mxn * ci.quantity) as subtotal
+        FROM cart_items ci
+        JOIN products p ON ci.article_id = p.article_id
+        WHERE ci.cart_id = ?
+        ORDER BY ci.added_at DESC
+    """, [cart_id])
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    items = []
+    for row in rows:
+        items.append({
+            'id': row[0],
+            'cart_id': row[1],
+            'article_id': row[2],
+            'quantity': row[3],
+            'name': row[4],
+            'type': row[5],
+            'color': row[6],
+            'price': row[7],
+            'image_url': row[8],
+            'subtotal': row[9]
+        })
+    
+    return items
+
+
+def calculate_cart_total(cart_id: int) -> float:
+    """
+    Calcula el total del carrito sumando (precio * cantidad) de todos los items
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT COALESCE(SUM(p.price_mxn * ci.quantity), 0.0) as total
+        FROM cart_items ci
+        JOIN products p ON ci.article_id = p.article_id
+        WHERE ci.cart_id = ?
+    """, [cart_id])
+    
+    result = cur.fetchone()
+    conn.close()
+    
+    # IMPORTANTE: Siempre retornar float, nunca None
+    return float(result[0]) if result and result[0] else 0.0
+
+
+def get_cart_summary(cart_id: int) -> dict:
+    """
+    Obtiene resumen completo del carrito: items, total, y conteo
+    """
+    items = get_cart_items(cart_id)
+    total = calculate_cart_total(cart_id)
+    
+    return {
+        'cart_id': cart_id,
+        'items': items,
+        'items_count': len(items),
+        'total_amount': total
+    }

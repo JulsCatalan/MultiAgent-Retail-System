@@ -707,7 +707,6 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
     Se llama automáticamente cuando Stripe redirige después del pago exitoso.
     URL: /checkout/success?session_id=cs_test_xxx
     """
-
     start_time = time.time()
     
     logger.info(f"🎉 [SUCCESS] Procesando pago exitoso - SessionID: {session_id}")
@@ -719,12 +718,21 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
             expand=['line_items', 'payment_intent']
         )
         
+        # 🆕 IMPRIMIR CONVERSATION_ID desde metadata
+        conversation_id_from_metadata = session.metadata.get('conversation_id', 'N/A')
+        print(f"\n{'='*60}")
+        print(f"📱 CONVERSATION_ID: {conversation_id_from_metadata}")
+        print(f"🆔 SESSION_ID: {session_id}")
+        print(f"{'='*60}\n")
+        
         if session.payment_status != 'paid':
             logger.warning(f"⚠️ Sesión no pagada: {session.payment_status}")
             return CheckoutSuccessResponse(
                 status="error",
                 message="El pago aún no se ha completado",
-                error=f"Payment status: {session.payment_status}"
+                error=f"Payment status: {session.payment_status}",
+                total_amount=0.0,
+                items_count=0
             )
         
         # 2. Extraer metadata
@@ -751,14 +759,14 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
             
             # Contar items de la orden existente
             cur.execute("""
-                SELECT COUNT(*), SUM(subtotal) 
+                SELECT COUNT(*), COALESCE(SUM(subtotal), 0.0)
                 FROM order_items 
                 WHERE order_id = ?
             """, [existing_order[0]])
             
             count_result = cur.fetchone()
             items_count = count_result[0] if count_result else 0
-            total = count_result[1] if count_result else 0.0
+            total = float(count_result[1]) if count_result else 0.0
             
             conn.close()
             
@@ -770,9 +778,20 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
                 items_count=items_count
             )
         
-        # 4. Obtener items del carrito
+        # 4. Obtener items del carrito usando las nuevas funciones
         cart_items = get_cart_items(cart_id)
         total_amount = calculate_cart_total(cart_id)
+        
+        if not cart_items:
+            logger.error("❌ No se encontraron items en el carrito")
+            conn.close()
+            return CheckoutSuccessResponse(
+                status="error",
+                message="No se encontraron items en el carrito",
+                error="Cart is empty",
+                total_amount=0.0,
+                items_count=0
+            )
         
         logger.info(f"🛒 Items del carrito: {len(cart_items)}, Total: ${total_amount:.2f}")
         
@@ -783,14 +802,13 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
             address = shipping_details.address
             if address:
                 shipping_address = f"{address.line1}, {address.city}, {address.state} {address.postal_code}, {address.country}"
+                logger.info(f"📍 Dirección: {shipping_address}")
         
         # 6. Crear orden en la BD
-        # Extraer payment_intent ID (puede ser un objeto PaymentIntent o un string)
         payment_intent_id = None
         if hasattr(session, 'payment_intent'):
             payment_intent = session.payment_intent
             if payment_intent:
-                # Si es un objeto PaymentIntent, obtener su ID, si es string usar directamente
                 payment_intent_id = payment_intent.id if hasattr(payment_intent, 'id') else str(payment_intent)
         
         cur.execute("""
@@ -835,9 +853,9 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
                 order_id,
                 item['article_id'],
                 item['name'],
-                item['price'],
-                item['quantity'],
-                item['subtotal']
+                float(item['price']),
+                int(item['quantity']),
+                float(item['subtotal'])
             ])
         
         logger.info(f"📦 {len(cart_items)} items agregados a la orden")
@@ -849,9 +867,8 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
         if conversation_id:
             try:
                 with KapsoClient() as kapso:
-                    # Construir mensaje de confirmación
                     items_summary = []
-                    for i, item in enumerate(cart_items[:10], start=1):  # Limitar a 10 items para el mensaje
+                    for i, item in enumerate(cart_items[:10], start=1):
                         items_summary.append(
                             f"{i}. {item['name']} x{item['quantity']} - ${item['subtotal']:.2f} MXN"
                         )
@@ -911,7 +928,9 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
         return CheckoutSuccessResponse(
             status="error",
             message="Error verificando el pago",
-            error=str(e)
+            error=str(e),
+            total_amount=0.0,
+            items_count=0
         )
     
     except Exception as e:
@@ -919,7 +938,7 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 
 @app.get("/checkout/cancel")
 async def checkout_cancel():
