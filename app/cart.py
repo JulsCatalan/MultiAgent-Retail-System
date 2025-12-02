@@ -1,5 +1,13 @@
 from typing import List, Dict, Any, Optional
 from .db import get_connection
+import stripe
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Initialize Stripe
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 
 def _get_or_create_cart(conversation_id: str) -> int:
@@ -365,3 +373,216 @@ def clear_cart(cart_id: int):
     
     conn.commit()
     conn.close()
+
+
+def create_stripe_checkout_for_whatsapp(
+    conversation_id: str,
+    user_name: str,
+    phone_number: str
+) -> Dict[str, Any]:
+    """
+    Crea una sesión de checkout de Stripe específicamente para usuarios de WhatsApp.
+    
+    Args:
+        conversation_id: ID único de la conversación
+        user_name: Nombre del usuario (de WhatsApp)
+        phone_number: Teléfono del usuario (de WhatsApp)
+        
+    Returns:
+        Dict con checkout_url, session_id, total, items_count, o error
+    """
+    try:
+        # 1. Validar que Stripe esté configurado
+        if not stripe.api_key:
+            logger.error("❌ STRIPE_SECRET_KEY no configurado")
+            return {
+                "success": False,
+                "error": "Sistema de pagos no configurado. Contacta al administrador."
+            }
+        
+        # 2. Obtener carrito
+        cart_id = get_cart_by_conversation(conversation_id)
+        if not cart_id:
+            logger.warning(f"⚠️ No existe carrito para: {conversation_id}")
+            return {
+                "success": False,
+                "error": "No se encontró un carrito. Primero agrega algunos productos."
+            }
+        
+        # 3. Obtener items del carrito
+        cart_items = get_cart_items(cart_id)
+        if not cart_items:
+            logger.warning(f"⚠️ Carrito vacío para: {conversation_id}")
+            return {
+                "success": False,
+                "error": "Tu carrito está vacío. Agrega algunos productos antes de pagar."
+            }
+        
+        # 4. Calcular total
+        total_amount = calculate_cart_total(cart_id)
+        
+        logger.info(
+            f"💳 Creando checkout Stripe - Usuario: {user_name}, "
+            f"Phone: {phone_number}, Items: {len(cart_items)}, Total: ${total_amount:.2f}"
+        )
+        
+        # 5. Crear line_items para Stripe
+        line_items = []
+        for item in cart_items:
+            unit_amount = int(item['price'] * 100)  # Convertir a centavos
+            
+            line_items.append({
+                'price_data': {
+                    'currency': 'mxn',
+                    'product_data': {
+                        'name': item['name'],
+                        'description': f"{item['type']} - {item['color']}" if item.get('color') else item['type'],
+                        'images': [item['image_url']] if item.get('image_url') else [],
+                    },
+                    'unit_amount': unit_amount,
+                },
+                'quantity': item['quantity'],
+            })
+        
+        # 6. Crear sesión de Stripe
+        frontend_url = os.getenv("FRONTEND_URL", "https://yourapp.com")
+        
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=line_items,
+            mode='payment',
+            success_url=f"{frontend_url}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{frontend_url}/checkout/cancel",
+            client_reference_id=conversation_id,
+            metadata={
+                'conversation_id': conversation_id,
+                'user_name': user_name,
+                'phone_number': phone_number,
+                'cart_id': str(cart_id),
+                'source': 'whatsapp'
+            },
+            billing_address_collection='required',
+            shipping_address_collection={
+                'allowed_countries': ['MX'],
+            },
+            phone_number_collection={'enabled': True}
+        )
+        
+        logger.info(
+            f"✅ Checkout creado - SessionID: {checkout_session.id}, "
+            f"URL: {checkout_session.url[:50]}..."
+        )
+        
+        return {
+            "success": True,
+            "checkout_url": checkout_session.url,
+            "session_id": checkout_session.id,
+            "total_amount": total_amount,
+            "items_count": len(cart_items),
+            "cart_items": cart_items
+        }
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"❌ Error de Stripe: {type(e).__name__}: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Error al crear sesión de pago: {str(e)}"
+        }
+    
+    except Exception as e:
+        logger.error(f"❌ Error creando checkout: {type(e).__name__}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {
+            "success": False,
+            "error": "Error inesperado al crear sesión de pago. Intenta de nuevo."
+        }
+
+
+def format_checkout_message(cart_items: List[Dict], total: float, checkout_url: str) -> str:
+    """
+    Formatea un mensaje de WhatsApp con resumen del carrito y link de pago.
+    
+    Args:
+        cart_items: Lista de items en el carrito
+        total: Total a pagar
+        checkout_url: URL del checkout de Stripe
+        
+    Returns:
+        Mensaje formateado para WhatsApp
+    """
+    # Construir lista de items
+    items_text = []
+    for i, item in enumerate(cart_items, 1):
+        subtotal = item['price'] * item['quantity']
+        items_text.append(
+            f"{i}. *{item['name']}*\n"
+            f"   Color: {item.get('color', 'N/A')} | Cantidad: {item['quantity']}\n"
+            f"   Precio: ${subtotal:.2f} MXN"
+        )
+    
+    items_section = "\n\n".join(items_text)
+    
+    # Construir mensaje completo
+    message = f"""🛒 *RESUMEN DE TU CARRITO*
+
+{items_section}
+
+━━━━━━━━━━━━━━━━━━
+💰 *TOTAL: ${total:.2f} MXN*
+━━━━━━━━━━━━━━━━━━
+
+¡Perfecto! Tu orden está lista para procesar. 
+
+👉 *HAZ CLIC AQUÍ PARA PAGAR:*
+{checkout_url}
+
+✅ Pago 100% seguro con Stripe
+🚚 Envío a toda la República Mexicana  
+📦 Recibirás confirmación de tu orden
+⏰ Este link es válido por 24 horas
+
+_Si deseas modificar tu carrito antes de pagar, solo dime "modificar carrito" o "seguir comprando"._"""
+    
+    return message
+
+
+def format_cart_summary(cart_items: List[Dict], total: float) -> str:
+    """
+    Formatea un resumen del carrito sin link de pago.
+    
+    Args:
+        cart_items: Lista de items en el carrito
+        total: Total del carrito
+        
+    Returns:
+        Mensaje formateado para WhatsApp
+    """
+    if not cart_items:
+        return "Tu carrito está vacío. 🛒\n\nBusca productos y dime cuál quieres agregar."
+    
+    items_text = []
+    for i, item in enumerate(cart_items, 1):
+        subtotal = item['price'] * item['quantity']
+        items_text.append(
+            f"{i}. *{item['name']}* ({item.get('color', 'N/A')})\n"
+            f"   Cantidad: {item['quantity']} | Subtotal: ${subtotal:.2f} MXN"
+        )
+    
+    items_section = "\n\n".join(items_text)
+    
+    message = f"""🛒 *TU CARRITO ACTUAL*
+
+{items_section}
+
+━━━━━━━━━━━━━━━━━━
+💰 *TOTAL: ${total:.2f} MXN*
+━━━━━━━━━━━━━━━━━━
+
+¿Qué deseas hacer?
+• "Proceder al pago" - Para finalizar compra
+• "Agregar más productos" - Para seguir comprando
+• "Quitar producto X" - Para eliminar un item
+• "Vaciar carrito" - Para empezar de nuevo"""
+    
+    return message

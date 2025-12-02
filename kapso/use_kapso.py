@@ -139,21 +139,93 @@ async def handle_response(data_list: list) -> dict:
             metadata=UserMetadata(whatsapp_config_id=whatsapp_config_id, reached_from_phone_number=reached_from_phone_number)
         )
     
-    # Crear cliente de Kapso y pasarlo al agente para que envíe la respuesta
+    # --- FLUJO DE AGENTE CON CART INTEGRATION ---
     try:
-        with KapsoClient() as kapso_client:
-            agent_response = await process_user_query(user, combined_message, kapso_client=kapso_client)
-            
-            
-            
-            return {
-                "status": "success",
-                "message": "Respuesta enviada",
-                "agent_response": agent_response,
-                "data": data_list
-            }
+        from app.agents.cart_agent import handle_cart_interaction
+        from app.cart import save_recent_products
+        
+        # Ejecutar en thread pool para no bloquear
+        loop = asyncio.get_event_loop()
+        
+        def _handle_cart_and_agent():
+            """Maneja cart agent y agente normal, luego envía respuesta"""
+            with KapsoClient() as kapso:
+                # PASO 1: Verificar si es interacción de carrito
+                cart_result = handle_cart_interaction(
+                    conversation_id=whatsapp_conversation_id,
+                    user_message=combined_message,
+                    user_name=contact_name,
+                    phone_number=phone_number
+                )
+                
+                if cart_result.get("handled"):
+                    # Cart agent manejó la solicitud (add, remove, show, checkout, etc.)
+                    response_text = cart_result["response"]
+                    logger.info("🛒 Cart agent manejó la solicitud")
+                    kapso.send_message(whatsapp_conversation_id, response_text)
+                    
+                    return {
+                        "cart_handled": True, 
+                        "response": response_text
+                    }
+                
+                # PASO 2: Agente normal (Router → Retriever → Generator)
+                logger.info("🤖 Usando agente normal")
+                
+                import asyncio as inner_asyncio
+                
+                try:
+                    # Ejecutar async function en nuevo loop
+                    agent_loop = inner_asyncio.new_event_loop()
+                    inner_asyncio.set_event_loop(agent_loop)
+                    
+                    result = agent_loop.run_until_complete(
+                        process_user_query(user, combined_message, kapso_client=None)
+                    )
+                    
+                    agent_loop.close()
+                    
+                    # Enviar respuesta
+                    agent_response = result.get("response", "")
+                    kapso.send_message(whatsapp_conversation_id, agent_response)
+                    
+                    # Guardar productos como recientes para cart
+                    products = result.get("products", [])
+                    if products:
+                        logger.info(f"📦 Guardando {len(products)} productos recientes")
+                        save_recent_products(whatsapp_conversation_id, products)
+                    
+                    return {
+                        "cart_handled": False,
+                        "response": agent_response,
+                        "products_count": len(products),
+                        "routing_decision": result.get("routing_decision")
+                    }
+                    
+                except Exception as agent_error:
+                    logger.error(f"❌ Error en agente: {agent_error}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    
+                    error_msg = "Disculpa, tuve un problema. ¿Podrías intentar de nuevo?"
+                    kapso.send_message(whatsapp_conversation_id, error_msg)
+                    
+                    return {"cart_handled": False, "error": str(agent_error)}
+        
+        # Ejecutar flujo completo en executor
+        agent_result = await loop.run_in_executor(None, _handle_cart_and_agent)
+        
+        logger.info("✅ Respuesta enviada a conversación %s", whatsapp_conversation_id)
+        
+        return {
+            "status": "success",
+            "message": "Respuesta enviada",
+            "agent_result": agent_result,
+            "data": data_list
+        }
+        
     except Exception as e:
-        print("❌ Error ejecutando agente o enviando respuesta: %s", e)
+        logger.error(f"❌ Error en flujo del agente: {e}")
         import traceback
-        print("Traceback: %s", traceback.format_exc())
+        logger.error(traceback.format_exc())
         return {"status": "error", "message": "Error ejecutando agente o enviando respuesta"}

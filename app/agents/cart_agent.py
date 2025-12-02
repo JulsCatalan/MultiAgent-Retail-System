@@ -1,14 +1,23 @@
 import json
 import os
+import logging
 from typing import Dict, Any, List
 
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 from ..cart import (
     add_to_cart,
     remove_from_cart,
     get_cart,
     get_recent_products,
+    create_stripe_checkout_for_whatsapp,
+    format_checkout_message,
+    format_cart_summary,
+    calculate_cart_total,
+    get_cart_by_conversation,
+    clear_cart as clear_cart_func,
 )
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -45,6 +54,9 @@ Tu tarea es decidir si el usuario quiere:
 - VER su carrito actual
 - AGREGAR un producto específico de la lista reciente al carrito
 - QUITAR/ELIMINAR un producto del carrito
+- PROCEDER AL PAGO / CHECKOUT (finalizar compra)
+- SEGUIR COMPRANDO / MODIFICAR CARRITO (después de ver checkout)
+- VACIAR el carrito completamente
 
 MENSAJE DEL USUARIO:
 "{user_message}"
@@ -53,27 +65,37 @@ PRODUCTOS RECIENTES MOSTRADOS AL USUARIO:
 {products_text}
 
 REGLAS:
-1. Si el usuario solo describe gustos o hace preguntas sobre productos (por ejemplo: "tienes camisas verdes", "qué opinas de esta playera"), pero NO habla explícitamente de carrito o de comprar/agregar/quitar, entonces:
+1. Si el usuario solo describe gustos o hace preguntas sobre productos, pero NO habla explícitamente de carrito:
    - mode = "none"
-2. Si el usuario quiere ver su carrito ("ver carrito", "qué tengo en el carrito", "muéstrame el carrito", etc.):
+
+2. Si el usuario quiere ver su carrito ("ver carrito", "qué tengo", "muéstrame el carrito"):
    - mode = "show_cart"
-3. Si el usuario quiere AGREGAR un producto de la lista reciente al carrito ("agrega el producto X", "quiero agregar el suéter blanco", etc.):
+
+3. Si el usuario quiere AGREGAR un producto ("agrega el producto X", "quiero el suéter blanco"):
    - mode = "add_to_cart"
-   - product_index = número del producto en la lista reciente (1, 2, 3, ...) SI se puede inferir con claridad.
-4. Si el usuario quiere QUITAR/ELIMINAR un producto del carrito ("quita el producto X", "elimina del carrito", "quita esa camisa", "no quiero el producto 1", etc.):
+   - product_index = número del producto en la lista reciente (1, 2, 3, ...) SI se puede inferir.
+
+4. Si el usuario quiere QUITAR/ELIMINAR un producto del carrito ("quita el producto X", "elimina", "no quiero el producto 1"):
    - mode = "remove_from_cart"
-   - product_index = número del producto en el carrito (1, 2, 3, ...) SI se puede inferir con claridad.
-   - NOTA: El product_index aquí se refiere a la posición del producto EN EL CARRITO, no en la lista reciente.
-5. Si el usuario es ambiguo (no está claro si quiere agregar/quitar o solo hablar), establece:
-   - needs_confirmation = true
-   - confidence menor (por ejemplo 0.5)
-   y NO asumas que realmente quiere modificar el carrito.
-6. NUNCA inventes productos que no están en la lista reciente para agregar al carrito.
+   - product_index = número del producto EN EL CARRITO (1, 2, 3, ...)
+
+5. Si el usuario quiere PROCEDER AL PAGO ("pagar", "checkout", "proceder al pago", "comprar", "finalizar compra", "quiero pagar", "pagar ahora"):
+   - mode = "checkout"
+
+6. Si el usuario quiere SEGUIR COMPRANDO después de ver el checkout ("seguir comprando", "agregar más", "modificar carrito", "cancelar pago", "espera", "añadir más productos"):
+   - mode = "continue_shopping"
+
+7. Si el usuario quiere VACIAR todo el carrito ("vaciar carrito", "eliminar todo", "borrar carrito", "empezar de nuevo"):
+   - mode = "clear_cart"
+
+8. Si el usuario es ambiguo, establece needs_confirmation = true y confidence menor (0.5).
+
+9. NUNCA inventes productos que no están en la lista reciente.
 
 Formato de respuesta:
-Responde SOLO con un JSON válido, sin texto adicional, con el siguiente esquema:
+Responde SOLO con un JSON válido, sin texto adicional:
 {{
-  "mode": "none" | "add_to_cart" | "remove_from_cart" | "show_cart",
+  "mode": "none" | "add_to_cart" | "remove_from_cart" | "show_cart" | "checkout" | "continue_shopping" | "clear_cart",
   "product_index": <número del producto o null>,
   "needs_confirmation": true | false,
   "confidence": <número entre 0.0 y 1.0>
@@ -326,20 +348,36 @@ Responde SOLO con un JSON válido, sin texto adicional:
 def handle_cart_interaction(
     conversation_id: str,
     user_message: str,
+    user_name: str = "Cliente",
+    phone_number: str = None,
 ) -> Dict[str, Any]:
     """
     Maneja la lógica de carrito si aplica.
     
+    Args:
+        conversation_id: ID de la conversación
+        user_message: Mensaje del usuario
+        user_name: Nombre del usuario (de WhatsApp)
+        phone_number: Teléfono del usuario (de WhatsApp)
+    
     Devuelve:
-    - handled: bool  -> True si ya se generó una respuesta y no se debe seguir con el flujo normal
+        - handled: bool  -> True si ya se generó una respuesta
     - response: str  -> Mensaje para el usuario (si handled=True)
-    - products: list -> Lista de productos a devolver (opcional, normalmente vacía)
+        - products: list -> Lista de productos a devolver (opcional)
     """
     recent = get_recent_products(conversation_id)
     intent = detect_cart_intent_llm(user_message, recent)
     mode = intent["mode"]
+    
+    logger.info(
+        f"🛒 [CART-AGENT] Intent detectado - "
+        f"Mode: {mode}, "
+        f"ConvID: {conversation_id}, "
+        f"Confidence: {intent.get('confidence', 0.0):.2f}"
+    )
 
     if mode == "none":
+        logger.debug("➡️ Cart agent no maneja este mensaje, pasando a agente normal")
         return {"handled": False}
 
     # Ver carrito
@@ -347,36 +385,152 @@ def handle_cart_interaction(
         cart_items = get_cart(conversation_id)
         if not cart_items:
             response = (
-                "Por ahora tu carrito está vacío. "
-                "Cuando veas productos que te gusten, puedes decirme por ejemplo "
-                "\"agrega el producto 1 al carrito\"."
+                "Por ahora tu carrito está vacío. 🛒\n\n"
+                "Cuando veas productos que te gusten, puedes decirme:\n"
+                "• \"Agrega el producto 1\"\n"
+                "• \"Quiero el suéter azul\""
             )
             return {"handled": True, "response": response, "products": []}
 
-        lines = []
-        total = 0.0
-        for i, item in enumerate(cart_items, start=1):
-            line_total = float(item["price_mxn"]) * int(item["quantity"])
-            total += line_total
-            lines.append(
-                f"Producto {i}: {item['prod_name']} ({item['colour_group_name']}) x{item['quantity']} - "
-                f"${line_total:.2f} MXN"
+        # Calcular total
+        cart_id = get_cart_by_conversation(conversation_id)
+        total = calculate_cart_total(cart_id) if cart_id else 0.0
+        
+        # Usar el formateador mejorado
+        response = format_cart_summary(cart_items, total)
+        return {"handled": True, "response": response, "products": []}
+    
+    # Proceder al pago / Checkout
+    if mode == "checkout":
+        logger.info(f"💳 [CHECKOUT] Usuario solicita checkout - ConvID: {conversation_id}")
+        
+        cart_items = get_cart(conversation_id)
+        
+        # Validar que el carrito no esté vacío
+        if not cart_items:
+            logger.warning(f"⚠️ Intento de checkout con carrito vacío - ConvID: {conversation_id}")
+            response = (
+                "Tu carrito está vacío. 🛒\n\n"
+                "Primero busca y agrega algunos productos que te gusten, "
+                "luego podrás proceder al pago."
             )
+            return {"handled": True, "response": response, "products": []}
 
-        lines.append(f"Total aproximado: ${total:.2f} MXN")
+        # Validar que tengamos nombre y teléfono del usuario
+        if not user_name or not phone_number:
+            logger.warning(f"⚠️ Checkout sin datos de usuario - Name: {user_name}, Phone: {phone_number}")
+            response = (
+                "Para proceder con el pago, necesito confirmar tus datos. 📝\n\n"
+                "Por favor, asegúrate de que tu perfil de WhatsApp tenga:\n"
+                "• Tu nombre completo\n"
+                "• Tu número de teléfono\n\n"
+                "Luego intenta de nuevo."
+            )
+            return {"handled": True, "response": response, "products": []}
+
+        # Crear sesión de checkout de Stripe
+        logger.info(f"💳 Creando sesión Stripe para {user_name} ({phone_number})")
+        checkout_result = create_stripe_checkout_for_whatsapp(
+            conversation_id=conversation_id,
+            user_name=user_name,
+            phone_number=phone_number
+        )
+        
+        # Manejar error
+        if not checkout_result.get("success"):
+            error_msg = checkout_result.get("error", "Error desconocido")
+            logger.error(f"❌ Error creando checkout: {error_msg}")
+            response = (
+                f"❌ Lo siento, hubo un problema al crear tu sesión de pago.\n\n"
+                f"Error: {error_msg}\n\n"
+                f"Por favor intenta de nuevo en unos momentos o contacta a soporte."
+            )
+            return {"handled": True, "response": response, "products": []}
+
+        # Éxito - formatear mensaje con link de pago
+        logger.info(
+            f"✅ Checkout creado exitosamente - "
+            f"SessionID: {checkout_result['session_id']}, "
+            f"Total: ${checkout_result['total_amount']:.2f} MXN, "
+            f"Items: {checkout_result['items_count']}"
+        )
+        
+        response = format_checkout_message(
+            cart_items=checkout_result["cart_items"],
+            total=checkout_result["total_amount"],
+            checkout_url=checkout_result["checkout_url"]
+        )
+        
+        return {"handled": True, "response": response, "products": []}
+    
+    # Seguir comprando / Modificar carrito (después de checkout)
+    if mode == "continue_shopping":
+        logger.info(f"🛍️ Usuario decidió seguir comprando - ConvID: {conversation_id}")
+        
         response = (
-            "Este es el resumen de tu carrito actual:\n\n" + "\n".join(lines) +
-            "\n\nSi quieres quitar algo o cambiar cantidades, dime qué producto quieres modificar."
+            "¡Perfecto! Puedes seguir explorando productos. 🛍️\n\n"
+            "Dime qué estás buscando y te ayudo a encontrarlo:\n"
+            "• \"Busco vestidos rojos\"\n"
+            "• \"Muéstrame jeans\"\n"
+            "• \"¿Tienes camisetas?\"\n\n"
+            "También puedes:\n"
+            "• Ver tu carrito: \"Ver carrito\"\n"
+            "• Modificar items: \"Quita el producto 1\"\n"
+            "• Proceder al pago cuando estés listo"
+        )
+        return {"handled": True, "response": response, "products": []}
+    
+    # Vaciar carrito completamente
+    if mode == "clear_cart":
+        logger.info(f"🗑️ Usuario solicita vaciar carrito - ConvID: {conversation_id}")
+        
+        cart_id = get_cart_by_conversation(conversation_id)
+        
+        if not cart_id:
+            logger.debug("Carrito ya vacío (no existe cart_id)")
+            response = "Tu carrito ya está vacío. 🛒"
+            return {"handled": True, "response": response, "products": []}
+        
+        cart_items = get_cart(conversation_id)
+        
+        if not cart_items:
+            logger.debug("Carrito ya vacío (sin items)")
+            response = "Tu carrito ya está vacío. 🛒"
+            return {"handled": True, "response": response, "products": []}
+        
+        # Confirmación antes de vaciar (si la confianza es baja)
+        confidence = intent.get("confidence", 0.0)
+        if confidence < 0.8:
+            items_count = len(cart_items)
+            logger.info(f"⚠️ Solicitando confirmación para vaciar (confidence: {confidence:.2f})")
+            response = (
+                f"⚠️ ¿Estás seguro de que quieres vaciar tu carrito?\n\n"
+                f"Tienes {items_count} producto(s) en el carrito.\n\n"
+                f"Responde \"sí, vaciar carrito\" para confirmar."
+            )
+            return {"handled": True, "response": response, "products": []}
+        
+        # Vaciar el carrito
+        items_count = len(cart_items)
+        clear_cart_func(cart_id)
+        logger.info(f"✅ Carrito vaciado - {items_count} items eliminados")
+        
+        response = (
+            "✅ Tu carrito ha sido vaciado completamente.\n\n"
+            "¿Qué te gustaría buscar ahora?"
         )
         return {"handled": True, "response": response, "products": []}
 
     # Quitar del carrito
     if mode == "remove_from_cart":
+        logger.info(f"➖ Usuario quiere quitar del carrito - ConvID: {conversation_id}")
+        
         cart_items = get_cart(conversation_id)
         if not cart_items:
+            logger.debug("Intento de quitar de carrito vacío")
             return {
                 "handled": True,
-                "response": "Tu carrito está vacío, no hay nada que quitar.",
+                "response": "Tu carrito está vacío, no hay nada que quitar. 🛒",
                 "products": [],
             }
         
@@ -473,29 +627,45 @@ def handle_cart_interaction(
         
         # Confianza alta: procedemos a quitar del carrito
         remove_from_cart(conversation_id, article_id)
+        
         product_name = product.get("prod_name", "el producto") if product else "el producto"
         product_color = product.get("colour_group_name", "") if product else ""
         color_text = f" ({product_color})" if product_color else ""
         
+        logger.info(
+            f"✅ Producto quitado del carrito - "
+            f"ArticleID: {article_id}, "
+            f"Nombre: {product_name}, "
+            f"ConvID: {conversation_id}"
+        )
+        
         response = (
-            f"He quitado del carrito el Producto {resolved_index}: {product_name}{color_text}. "
-            "Si quieres, puedo mostrarte tu carrito actualizado o seguir buscándote más opciones."
+            f"✅ He quitado del carrito:\n\n"
+            f"*{product_name}*{color_text}\n\n"
+            f"¿Qué deseas hacer ahora?\n"
+            f"• \"Ver carrito\" - Ver tu carrito actualizado\n"
+            f"• \"Seguir comprando\" - Buscar más productos\n"
+            f"• \"Proceder al pago\" - Si estás listo"
         )
         return {"handled": True, "response": response, "products": []}
 
     # Agregar al carrito usando posición de producto reciente
     if mode == "add_to_cart":
+        logger.info(f"➕ Usuario quiere agregar al carrito - ConvID: {conversation_id}")
+        
         index = intent.get("product_index")
         needs_confirmation = intent.get("needs_confirmation", False)
         confidence = float(intent.get("confidence", 0.0))
 
         if not recent:
+            logger.warning(f"⚠️ No hay productos recientes para agregar")
             return {
                 "handled": True,
                 "response": (
-                    "Aún no tengo productos recientes asociados a esta conversación. "
-                    "Primero te mostraré algunas opciones y luego podrás decirme, por ejemplo, "
-                    "\"agrega el producto 1 al carrito\" o \"agrega el suéter blanco\"."
+                    "Aún no tengo productos recientes asociados a esta conversación. 🔍\n\n"
+                    "Primero busca productos (ej: \"Busco vestidos rojos\") y luego podrás:\n"
+                    "• \"Agrega el producto 1\"\n"
+                    "• \"Quiero el suéter blanco\""
                 ),
                 "products": [],
             }
@@ -564,10 +734,22 @@ def handle_cart_interaction(
 
         # Confianza alta: procedemos a agregar al carrito
         add_to_cart(conversation_id, product["article_id"], quantity=1)
+        
+        logger.info(
+            f"✅ Producto agregado al carrito - "
+            f"ArticleID: {product['article_id']}, "
+            f"Nombre: {product['prod_name']}, "
+            f"ConvID: {conversation_id}"
+        )
+        
         response = (
-            f"He agregado al carrito el Producto {resolved_index}: {product['prod_name']} "
-            f"({product['colour_group_name']}). "
-            "Si quieres, puedo mostrarte tu carrito completo o seguir buscándote más opciones."
+            f"✅ He agregado al carrito:\n\n"
+            f"*{product['prod_name']}* ({product['colour_group_name']})\n"
+            f"Precio: ${product['price_mxn']:.2f} MXN\n\n"
+            f"¿Qué deseas hacer ahora?\n"
+            f"• \"Ver carrito\" - Ver todos tus productos\n"
+            f"• \"Seguir comprando\" - Buscar más productos\n"
+            f"• \"Proceder al pago\" - Finalizar compra"
         )
         return {"handled": True, "response": response, "products": []}
 
