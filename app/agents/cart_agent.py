@@ -120,40 +120,44 @@ REGLAS IMPORTANTES:
 
 2. mode = "show_cart" → "ver carrito", "qué tengo", "muéstrame el carrito"
 
-3. mode = "add_to_cart" → SOLO si quiere agregar UN producto
-   - product_index = número del producto en la lista reciente
+3. mode = "add_to_cart" → Si quiere agregar producto(s)
+   - product_index = número si es uno solo, NULL si son varios o descripción
 
-4. mode = "remove_from_cart" → SOLO si quiere quitar UN producto
-   - Usa palabras: "quita", "elimina", "remove", "saca", "borra"
-   - product_index = NULL (el parser avanzado lo maneja)
+4. mode = "remove_from_cart" → Si quiere quitar producto(s) del carrito
+   - Palabras clave: "quita", "elimina", "remove", "saca", "borra", o números del carrito
+   - IMPORTANTE: "2", "el 2", "quita 2", "2 y 3", "quita el producto 2" → TODO es remove_from_cart
+   - Si dice números solos después de ver el carrito → es quitar
 
-5. mode = "multi_action" → Si el usuario quiere hacer MÚLTIPLES acciones en una sola petición:
-   - "agrega el 1 y el 3" → agregar múltiples productos
-   - "quita el 2 y el 4" → eliminar múltiples
-   - "agrega la chaqueta azul y los pantalones" → múltiples por descripción
-   - "quita los calcetines pero agrega la camisa" → mezcla de agregar Y quitar
-   - CLAVE: Si menciona "y", "también", múltiples números separados por coma, o mezcla agregar/quitar → multi_action
+5. mode = "multi_action" → SOLO si mezcla AGREGAR Y QUITAR en la misma oración
+   - "quita el 2 pero agrega el 3" → multi_action
+   - "elimina eso y agrega la camisa" → multi_action
 
-6. mode = "checkout" → "pagar", "checkout", "proceder al pago", "comprar", "finalizar compra", "quiero pagar"
+6. mode = "checkout" → "pagar", "checkout", "proceder al pago", "comprar", "finalizar"
 
 7. mode = "continue_shopping" → "seguir comprando", "agregar más", "modificar carrito", "cancelar pago"
 
 8. mode = "clear_cart" → "vaciar carrito", "eliminar todo", "borrar carrito"
 
-9. Si el usuario es ambiguo, establece needs_confirmation = true y confidence menor (0.5).
+9. mode = "confirm_action" → "sí", "si", "ok", "dale", "confirmo", "está bien", "correcto"
+   - SOLO cuando parece que está confirmando algo previo
 
-10. NUNCA inventes productos que no están en la lista.
+10. NUNCA inventes productos.
 
-EJEMPLOS DE MULTI_ACTION:
-- "agrega el 1, 2 y 5" → multi_action
+EJEMPLOS REMOVE_FROM_CART (UNO O VARIOS):
+- "2" → remove_from_cart (quitar item 2)
+- "1 y 3" → remove_from_cart (quitar items 1 y 3)
+- "quita la blusa" → remove_from_cart
+- "quita el 2 y el 4" → remove_from_cart
+- "elimina los calcetines" → remove_from_cart
+
+EJEMPLOS MULTI_ACTION (MEZCLA ADD+REMOVE):
 - "quita el rojo y agrega el azul" → multi_action
-- "agrega la chaqueta y los pantalones" → multi_action
-- "el 1 y el 3" → multi_action (asumiendo agregar múltiples)
+- "elimina el 2 pero agrega la camisa" → multi_action
 
 Formato de respuesta:
 Responde SOLO con un JSON válido, sin texto adicional:
 {{
-  "mode": "none" | "add_to_cart" | "remove_from_cart" | "show_cart" | "checkout" | "continue_shopping" | "clear_cart" | "multi_action",
+  "mode": "none" | "add_to_cart" | "remove_from_cart" | "show_cart" | "checkout" | "continue_shopping" | "clear_cart" | "multi_action" | "confirm_action",
   "product_index": <número del producto o null>,
   "needs_confirmation": true | false,
   "confidence": <número entre 0.0 y 1.0>
@@ -703,6 +707,62 @@ def execute_multi_action_cart(
     }
 
 
+def try_direct_number_removal(
+    user_message: str,
+    cart_items: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Intenta parsear una solicitud de eliminación simple por número.
+    Ej: "2", "1 y 3", "quita el 2", "elimina 1, 2, 3"
+    
+    Returns None si no puede parsear, o un resultado listo para usar.
+    """
+    import re
+    
+    # Extraer todos los números del mensaje
+    numbers = re.findall(r'\b(\d+)\b', user_message)
+    
+    if not numbers:
+        return None
+    
+    # Convertir a enteros y filtrar válidos
+    item_numbers = []
+    for n in numbers:
+        try:
+            num = int(n)
+            if 1 <= num <= len(cart_items):
+                item_numbers.append(num)
+        except ValueError:
+            pass
+    
+    if not item_numbers:
+        return None
+    
+    # Obtener los article_ids correspondientes
+    article_ids = []
+    for num in item_numbers:
+        idx = num - 1  # Convertir a 0-indexed
+        if 0 <= idx < len(cart_items):
+            article_ids.append(str(cart_items[idx]["article_id"]))
+    
+    if article_ids:
+        # Construir descripción
+        names = [cart_items[n-1]["prod_name"] for n in item_numbers if 1 <= n <= len(cart_items)]
+        description = f"Items {', '.join(map(str, item_numbers))}: {', '.join(names)}"
+        
+        return {
+            "removal_type": "by_number",
+            "items_to_remove": article_ids,
+            "quantity_changes": {},
+            "description": description,
+            "matched_items_summary": description,
+            "confidence": 0.95,  # Alta confianza en números directos
+            "needs_confirmation": len(article_ids) > 2,  # Solo confirmar si son muchos
+        }
+    
+    return None
+
+
 def parse_advanced_removal_request(
     user_message: str,
     cart_items: List[Dict[str, Any]],
@@ -735,10 +795,17 @@ def parse_advanced_removal_request(
             "needs_confirmation": False,
         }
     
-    # Formatear items del carrito con detalles
+    # PRIMERO: Intentar parseo directo por números (más rápido y confiable)
+    direct_result = try_direct_number_removal(user_message, cart_items)
+    if direct_result:
+        logger.info(f"✅ Eliminación directa por números: {direct_result['items_to_remove']}")
+        return direct_result
+    
+    # SI NO HAY NÚMEROS: usar LLM para interpretar
+    # Crear un mapeo claro para el LLM
     cart_text = "\n".join(
         [
-            f"Item {i+1}: article_id={item['article_id']} | "
+            f"Item {i+1}: article_id=\"{item['article_id']}\" | "
             f"Nombre: {item['prod_name']} | "
             f"Color: {item['colour_group_name']} | "
             f"Tipo: {item['product_type_name']} | "
@@ -749,7 +816,7 @@ def parse_advanced_removal_request(
         ]
     )
     
-    prompt = f"""Eres un agente que interpreta qué productos quiere ELIMINAR el usuario de su carrito.
+    prompt = f"""Eres un agente que determina qué productos ELIMINAR del carrito.
 
 MENSAJE DEL USUARIO:
 "{user_message}"
@@ -757,63 +824,69 @@ MENSAJE DEL USUARIO:
 PRODUCTOS EN EL CARRITO:
 {cart_text}
 
-CATEGORÍAS DE ROPA (¡MUY IMPORTANTE!):
-- "tops" = CUALQUIER prenda de arriba: Blouse, Blusa, Shirt, Camisa, T-shirt, Camiseta, Sweater, Hoodie, Top, Tank
-- "bottoms" = CUALQUIER prenda de abajo: Shorts, Jeans, Pants, Pantalón, Skirt, Falda, Trousers
-- "socks/calcetines" = Socks, Ankle Socks, Calcetines
-- "outerwear" = Jacket, Coat, Chamarra, Abrigo
+CATEGORÍAS DE ROPA:
+- "tops/blusas/camisas" = Blouse, Shirt, T-shirt, Sweater, Hoodie, Top, Tank
+- "bottoms/pantalones" = Shorts, Jeans, Pants, Skirt, Trousers
+- "socks/calcetines" = Socks, Ankle Socks
+- "outerwear/chamarras" = Jacket, Coat
 
-FORMAS DE PEDIR ELIMINACIÓN:
-1. Por NÚMERO: "2 y 3", "el 1", "1, 2", "quita 2 y 3" → USA LOS NÚMEROS DE ITEM
-2. Por NOMBRE: "quita EDC vanilla", "elimina Milli" → BUSCA EN EL NOMBRE
-3. Por CATEGORÍA: "quita los tops", "elimina las blusas" → BUSCA EN TIPO
-4. Por COLOR: "quita lo blanco" → BUSCA EN COLOR
-5. Por PRECIO: "quita lo menor a 500" → COMPARA PRECIO
+TU TAREA:
+1. Identifica qué items del carrito coinciden con lo que el usuario quiere eliminar
+2. Devuelve los item_numbers (1, 2, 3...) de los que coinciden
+3. USA LA LÓGICA: si dice "tops" y hay "Blouse" → coincide porque blusa es un top
 
-REGLAS CRÍTICAS:
-1. Si el usuario dice "2 y 3" o "1, 2" → son NÚMEROS DE ITEM, elimina Item 2 y Item 3
-2. Si dice "tops" y hay "Blouse" en Tipo → ESO ES UN TOP, elimínalo
-3. Si dice un nombre parcial como "EDC" y hay "EDC VANILLA BLOUSE" → COINCIDE
-4. SIEMPRE devuelve los article_id de los items que coinciden
+IMPORTANTE: Responde con los NÚMEROS de item que coinciden (1, 2, 3...), no los article_ids.
 
 Responde SOLO JSON:
 {{
-  "removal_type": "by_number" | "by_name" | "by_category" | "by_color" | "by_price" | "all" | "none",
-  "items_to_remove": ["article_id1", "article_id2"],
-  "quantity_changes": {{}},
-  "description": "Qué se va a eliminar",
+  "removal_type": "by_name" | "by_category" | "by_color" | "by_price" | "all" | "none",
+  "matching_item_numbers": [1, 2],
+  "description": "Descripción de lo que se eliminará",
   "confidence": 0.0-1.0,
-  "needs_confirmation": false
+  "needs_confirmation": true/false
 }}
 
 EJEMPLOS:
-- Usuario: "2 y 3" con items 1,2,3 → eliminar article_id del Item 2 y Item 3
-- Usuario: "tops" con Blouse en carrito → eliminar porque Blouse ES un top
-- Usuario: "EDC vanilla blouse" → buscar ese nombre exacto"""
+- "quita la blusa" y hay Item 1: Blouse → {{"matching_item_numbers": [1]}}
+- "los tops" y hay Item 2: Shirt, Item 3: Jeans → {{"matching_item_numbers": [2]}}
+- "todo lo azul" y hay Item 1: Blue Shirt, Item 2: Red Pants → {{"matching_item_numbers": [1]}}"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=500,
+        max_tokens=300,
         temperature=0.1,
     )
     
     content = response.choices[0].message.content.strip()
+    logger.debug(f"LLM removal response: {content}")
     
     try:
         data = json.loads(content)
         
+        # Convertir item_numbers a article_ids
+        matching_numbers = data.get("matching_item_numbers", [])
+        article_ids = []
+        
+        for num in matching_numbers:
+            try:
+                idx = int(num) - 1  # Convertir a 0-indexed
+                if 0 <= idx < len(cart_items):
+                    article_ids.append(str(cart_items[idx]["article_id"]))
+            except (ValueError, TypeError):
+                pass
+        
         return {
             "removal_type": data.get("removal_type", "none"),
-            "items_to_remove": data.get("items_to_remove", []),
+            "items_to_remove": article_ids,
             "quantity_changes": data.get("quantity_changes", {}),
             "description": data.get("description", ""),
-            "matched_items_summary": data.get("matched_items_summary", ""),
-            "confidence": float(data.get("confidence", 0.0)),
+            "matched_items_summary": data.get("description", ""),
+            "confidence": float(data.get("confidence", 0.5)),
             "needs_confirmation": bool(data.get("needs_confirmation", True)),
         }
     except (json.JSONDecodeError, ValueError, TypeError) as e:
-        logger.error(f"Error parsing advanced removal response: {e}")
+        logger.error(f"Error parsing removal response: {e}, content: {content}")
         return {
             "removal_type": "none",
             "items_to_remove": [],
@@ -933,6 +1006,18 @@ def handle_cart_interaction(
     if mode == "none":
         logger.debug("➡️ Cart agent no maneja este mensaje, pasando a agente normal")
         return {"handled": False}
+
+    # Confirmación de acción previa
+    if mode == "confirm_action":
+        logger.info(f"✅ Usuario confirma acción previa - ConvID: {conversation_id}")
+        # Por ahora, solo respondemos que está confirmado
+        # En una implementación más completa, guardaríamos la acción pendiente
+        return {
+            "handled": True,
+            "response": "¡Listo! ✅ ¿En qué más puedo ayudarte?",
+            "products": [],
+            "send_images": False,
+        }
 
     # Ver carrito
     if mode == "show_cart":
@@ -1110,8 +1195,8 @@ def handle_cart_interaction(
         )
         return {"handled": True, "response": response, "products": [], "send_images": False}
 
-    # Quitar del carrito - VERSIÓN AVANZADA
-    # Soporta: por nombre, categoría, tipo, color, precio, cantidad parcial
+    # Quitar del carrito - VERSIÓN MEJORADA
+    # Soporta: por número, nombre, categoría, tipo, color, precio
     if mode == "remove_from_cart":
         logger.info(f"➖ Usuario quiere quitar del carrito - ConvID: {conversation_id}")
         
@@ -1125,47 +1210,45 @@ def handle_cart_interaction(
                 "send_images": False,
             }
         
-        # Usar el parser avanzado para entender qué quiere eliminar el usuario
+        # Usar el parser para entender qué quiere eliminar el usuario
         removal_result = parse_advanced_removal_request(user_message, cart_items)
         
         logger.info(
             f"🔍 Análisis de eliminación - "
             f"Tipo: {removal_result['removal_type']}, "
             f"Items a eliminar: {len(removal_result['items_to_remove'])}, "
-            f"Cambios de cantidad: {len(removal_result['quantity_changes'])}, "
+            f"Article IDs: {removal_result['items_to_remove']}, "
             f"Confianza: {removal_result['confidence']:.2f}"
         )
         
         # Si no se encontró nada que eliminar
-        if removal_result["removal_type"] == "none" or (
-            not removal_result["items_to_remove"] and not removal_result["quantity_changes"]
-        ):
+        if removal_result["removal_type"] == "none" or not removal_result["items_to_remove"]:
             # Fallback: mostrar el carrito para que el usuario pueda especificar
             cart_list = []
             for i, item in enumerate(cart_items, start=1):
                 item_type = item.get('product_type_name', '')
                 cart_list.append(
-                    f"{i}. *{item['prod_name']}* ({item['colour_group_name']}) - {item_type} - "
-                    f"${item['price_mxn']:.2f} MXN x{item['quantity']}"
+                    f"{i}. *{item['prod_name']}* ({item['colour_group_name']}) - {item_type}"
                 )
             cart_text = "\n".join(cart_list)
             
             response = (
-                f"Mmm, no encontré eso en tu carrito. 🤔\n\n"
+                f"No encontré eso en tu carrito. 🤔\n\n"
                 f"Esto es lo que tienes:\n{cart_text}\n\n"
-                f"¿Cuál quieres que quite?"
+                f"Dime el número del que quieres quitar."
             )
             return {"handled": True, "response": response, "products": [], "send_images": False}
         
-        # Si necesita confirmación (confianza baja o eliminación masiva)
+        # Decidir si necesita confirmación
         items_to_remove_count = len(removal_result["items_to_remove"])
-        quantity_changes_count = len(removal_result["quantity_changes"])
-        total_affected = items_to_remove_count + quantity_changes_count
+        confidence = removal_result.get("confidence", 0.0)
         
+        # Solo pedir confirmación si:
+        # - Confianza muy baja (<0.5) O
+        # - Se eliminan más de 3 items a la vez
         needs_confirmation = (
-            removal_result["needs_confirmation"] or 
-            removal_result["confidence"] < 0.75 or
-            total_affected > 2  # Pedir confirmación si se afectan más de 2 items
+            (confidence < 0.5 and removal_result["removal_type"] != "by_number") or
+            items_to_remove_count > 3
         )
         
         if needs_confirmation:
@@ -1177,24 +1260,13 @@ def handle_cart_interaction(
                 if item:
                     affected_items.append(f"- {item['prod_name']} ({item['colour_group_name']})")
             
-            for article_id, new_qty in removal_result["quantity_changes"].items():
-                item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
-                if item:
-                    qty_to_remove = item['quantity'] - int(new_qty)
-                    affected_items.append(
-                        f"- {qty_to_remove} de tus {item['quantity']} {item['prod_name']}"
-                    )
-            
             affected_text = "\n".join(affected_items) if affected_items else removal_result.get("description", "productos")
             
             response = (
-                f"Voy a quitar esto de tu carrito:\n\n"
+                f"¿Quito esto de tu carrito?\n\n"
                 f"{affected_text}\n\n"
-                f"¿Está bien?"
+                f"Dime 'sí' para confirmar."
             )
-            
-            # Store the pending removal for confirmation
-            # For now, we'll just return and let the user confirm with a clear statement
             return {"handled": True, "response": response, "products": [], "send_images": False}
         
         # Confianza alta: ejecutar la eliminación
