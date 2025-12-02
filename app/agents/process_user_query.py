@@ -169,47 +169,52 @@ async def process_user_query(
     if conversation_context is None:
         conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
 
-    # 1) Revisar si el mensaje es sobre el carrito (ver carrito, agregar algo, etc.)
-    if user.conversation_id:
-        cart_result = handle_cart_interaction(
-            conversation_id=user.conversation_id,
-            user_message=user_message,
-        )
-    else:
-        cart_result = {"handled": False}
-
-    if cart_result.get("handled"):
-        response = cart_result.get("response", "")
-        products = cart_result.get("products", [])
-        routing_decision = "general"
-
-        # Enviar mensaje a través de Kapso si el cliente está disponible
-        message_sent = False
-        if kapso_client is not None and user.conversation_id:
-            try:
-                print("📤 Enviando respuesta a conversación %s", user.conversation_id)
-                kapso_client.send_message(user.conversation_id, response)
-                message_sent = True
-                print("✅ Mensaje enviado exitosamente")
-            except Exception as e:
-                print("❌ Error enviando mensaje por Kapso: %s", e)
-        else:
-            if kapso_client is None:
-                print("ℹ️ No se proporcionó cliente de Kapso, mensaje no enviado")
-            elif not user.conversation_id:
-                print("⚠️ Usuario sin conversation_id, mensaje no enviado")
-
-        return {
-            "response": response,
-            "products": products,
-            "routing_decision": routing_decision,
-            "conversation_history": conversation_context,
-            "message_sent": message_sent,
-        }
-    
-    # 2) Pasar el contexto al router para que tome una mejor decisión
+    # 1) Pasar el contexto al router para que tome una mejor decisión (incluye detección de carrito)
     routing = route_query(user_message, conversation_context=conversation_context)
     print("📝 Routing: %s", routing)
+    
+    # 2) Si el router detectó intención de carrito, manejar la interacción
+    if routing["decision"] == "cart":
+        if user.conversation_id:
+            cart_result = handle_cart_interaction(
+                conversation_id=user.conversation_id,
+                user_message=user_message,
+            )
+        else:
+            cart_result = {"handled": False, "response": "Necesitas un conversation_id para usar el carrito."}
+
+        if cart_result.get("handled"):
+            response = cart_result.get("response", "")
+            products = cart_result.get("products", [])
+
+            # Enviar mensaje a través de Kapso si el cliente está disponible
+            message_sent = False
+            if kapso_client is not None and user.conversation_id:
+                try:
+                    print("📤 Enviando respuesta a conversación %s", user.conversation_id)
+                    kapso_client.send_message(user.conversation_id, response)
+                    message_sent = True
+                    print("✅ Mensaje enviado exitosamente")
+                except Exception as e:
+                    print("❌ Error enviando mensaje por Kapso: %s", e)
+            else:
+                if kapso_client is None:
+                    print("ℹ️ No se proporcionó cliente de Kapso, mensaje no enviado")
+                elif not user.conversation_id:
+                    print("⚠️ Usuario sin conversation_id, mensaje no enviado")
+
+            return {
+                "response": response,
+                "products": products,
+                "routing_decision": "cart",
+                "conversation_history": conversation_context,
+                "message_sent": message_sent,
+            }
+        else:
+            # Si el router dijo "cart" pero handle_cart_interaction no lo manejó,
+            # fallback a respuesta general
+            response = "No pude procesar tu solicitud de carrito. Por favor, intenta de nuevo."
+            products = []
     
     # Si el routing es "general", generar respuesta sin buscar productos
     if routing["decision"] == "general":

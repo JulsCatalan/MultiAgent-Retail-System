@@ -174,7 +174,7 @@ Responde SOLO con un JSON válido, sin texto adicional:
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=200,
-        temperature=0.1,
+        temperature=0,
     )
     
     content = response.choices[0].message.content.strip()

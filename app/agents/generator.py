@@ -154,7 +154,7 @@ Responde de forma natural, ofreciendo ayuda y alternativas."""
         model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=1000,
-        temperature=0.7
+        temperature=0.6
     )
     
     return response.choices[0].message.content

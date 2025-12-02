@@ -105,7 +105,7 @@ Si no puedes identificar una prenda específica, responde con el mensaje actual 
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=150,
-        temperature=0.1  # Baja temperatura para respuestas más deterministas
+        temperature=0  # Baja temperatura para respuestas más deterministas
     )
     
     optimized_query = response.choices[0].message.content.strip()
