@@ -629,7 +629,7 @@ async def create_checkout_session(request: CheckoutRequest):
             })
         
         # 5. Crear sesión de Stripe (SIN email)
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:8000")
+        frontend_url = os.getenv("FRONTEND_URL")
         
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=['card'],
