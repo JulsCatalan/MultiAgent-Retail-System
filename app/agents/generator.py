@@ -103,7 +103,7 @@ MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
 
 INSTRUCCIONES:
 - Responde de manera natural, amigable y profesional
-- Si es un saludo (hola, buenos días, etc.), saluda de vuelta de forma cálida pero breve
+- Si es un saludo (hola, buenos días, etc.), saluda de vuelta de forma cálida pero breve, de otra forma NUNCA saludes al cliente.
 - Si pregunta sobre la tienda (horarios, ubicación, políticas, métodos de pago, envíos), proporciona información útil
 - Si es un agradecimiento, responde apropiadamente
 - Si hace una pregunta que no puedes responder, sé honesto y ofrece ayuda alternativa
@@ -112,6 +112,8 @@ INSTRUCCIONES:
 - NO uses formato de lista numerada, sé conversacional
 - Si hay contexto de conversación previa, úsalo para dar respuestas más coherentes
 - lee la conversación que hemos tenido y genera una respuesta con base en eso
+
+
 
 Responde de forma natural y conversacional."""
     
@@ -132,6 +134,7 @@ Responde de forma natural y conversacional."""
         
         prompt = f"""Eres un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
 
+CRITICO: NUNCA DEBES DE SALUDAR AL CLIENTE.
 MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
 {context_section}
 {preferences_section}
@@ -179,6 +182,8 @@ Responde de forma natural, explicando cómo cada producto se adapta a las necesi
         ])
         
         prompt = f"""Eres un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
+        
+       CRITICO: NUNCA DEBES DE SALUDAR AL CLIENTE.
 
 MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
 {context_section}
@@ -204,6 +209,7 @@ Responde de forma natural, destacando los productos más relevantes y explicando
     # ESCENARIO C: Routing "search" SIN productos encontrados
     else:
         prompt = f"""Eres un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
+
 
 MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
 {context_section}
