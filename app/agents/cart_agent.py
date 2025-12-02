@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 
-logger = logging.getLogger(__name__)
+
 
 from ..cart import (
     add_to_cart,
