@@ -707,8 +707,7 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
     Se llama automáticamente cuando Stripe redirige después del pago exitoso.
     URL: /checkout/success?session_id=cs_test_xxx
     """
-    session_ = await stripe.checkout.sessions.retrieve(session_id);
-    print(session_)
+
     start_time = time.time()
     
     logger.info(f"🎉 [SUCCESS] Procesando pago exitoso - SessionID: {session_id}")
