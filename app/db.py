@@ -77,6 +77,80 @@ def init_db():
         ON recent_products(conversation_id)
     """)
     
+    # Tabla de órdenes completadas
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            user_name TEXT,
+            phone_number TEXT,
+            stripe_session_id TEXT UNIQUE NOT NULL,
+            stripe_payment_intent TEXT,
+            total_amount REAL NOT NULL,
+            currency TEXT DEFAULT 'MXN',
+            status TEXT DEFAULT 'completed',
+            shipping_address TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_conversation
+        ON orders(conversation_id)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_session
+        ON orders(stripe_session_id)
+    """)
+    
+    # Items de la orden (copia de cart_items al momento de la compra)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            article_id TEXT NOT NULL,
+            prod_name TEXT,
+            price_mxn REAL NOT NULL,
+            quantity INTEGER NOT NULL,
+            subtotal REAL NOT NULL,
+            FOREIGN KEY(order_id) REFERENCES orders(id),
+            FOREIGN KEY(article_id) REFERENCES products(article_id)
+        )
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_order_items_order
+        ON order_items(order_id)
+    """)
+    
+    # Índices para mejorar performance de búsqueda
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_category 
+        ON products(product_group_name)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_type 
+        ON products(product_type_name)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_colour 
+        ON products(colour_group_name)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_department 
+        ON products(department_name)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_price 
+        ON products(price_mxn)
+    """)
+    
+    # ⭐ IMPORTANTE: Hacer commit ANTES de cerrar
     conn.commit()
     conn.close()
 

@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .db import get_connection
 
 
@@ -274,4 +274,94 @@ def get_recent_products(conversation_id: str) -> List[Dict[str, Any]]:
     conn.close()
     return results
 
+def get_cart_by_conversation(conversation_id: str) -> Optional[int]:
+    """
+    Obtiene el ID del carrito por conversation_id
+    Retorna None si no existe
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT id FROM carts 
+        WHERE conversation_id = ?
+    """, [conversation_id])
+    
+    result = cur.fetchone()
+    conn.close()
+    
+    return result[0] if result else None
 
+
+def get_cart_items(cart_id: int) -> List[Dict]:
+    """
+    Obtiene todos los items del carrito con información del producto
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT 
+            ci.id,
+            ci.article_id,
+            ci.quantity,
+            p.prod_name,
+            p.price_mxn,
+            p.image_url,
+            p.product_type_name,
+            p.colour_group_name
+        FROM cart_items ci
+        JOIN products p ON ci.article_id = p.article_id
+        WHERE ci.cart_id = ?
+        ORDER BY ci.added_at DESC
+    """, [cart_id])
+    
+    items = []
+    for row in cur.fetchall():
+        items.append({
+            "cart_item_id": row[0],
+            "article_id": row[1],
+            "quantity": row[2],
+            "name": row[3],
+            "price": row[4],
+            "image_url": row[5],
+            "type": row[6],
+            "color": row[7],
+            "subtotal": row[2] * row[4]  # quantity * price
+        })
+    
+    conn.close()
+    return items
+
+
+def calculate_cart_total(cart_id: int) -> float:
+    """
+    Calcula el total del carrito
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT SUM(ci.quantity * p.price_mxn) as total
+        FROM cart_items ci
+        JOIN products p ON ci.article_id = p.article_id
+        WHERE ci.cart_id = ?
+    """, [cart_id])
+    
+    result = cur.fetchone()
+    conn.close()
+    
+    return result[0] if result and result[0] else 0.0
+
+
+def clear_cart(cart_id: int):
+    """
+    Vacía el carrito después de completar la compra
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("DELETE FROM cart_items WHERE cart_id = ?", [cart_id])
+    
+    conn.commit()
+    conn.close()
