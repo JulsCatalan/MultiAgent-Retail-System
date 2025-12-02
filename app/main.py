@@ -29,6 +29,14 @@ from app.agents.process_user_query import process_user_query
 from models import User, UserMetadata, ConversationMessage
 from app.models import Constraints
 
+import stripe
+from .cart import (
+    get_cart_by_conversation,
+    get_cart_items,
+    calculate_cart_total,
+    clear_cart
+)
+
 app = FastAPI(title="Fashion Store API", version="1.0.0")
 
 # CORS para tu frontend
@@ -66,12 +74,16 @@ def root():
             "products": "GET /products - Obtiene productos con filtros simples",
             "categories": "GET /categories - Lista de categorías",
             "search": "POST /search - Búsqueda vectorial (para WhatsApp)",
-            "checkout": "POST /create-checkout-session",
-            "regenerate": "POST /regenerate-embeddings",
+            "checkout": "POST /create-checkout-session - Crear sesión de pago con Stripe",
+            "checkout-success": "GET /checkout/success?session_id=xxx - Confirmar pago y guardar orden",
+            "checkout-cancel": "GET /checkout/cancel - Pago cancelado",
+            "orders": "GET /orders/{conversation_id} - Historial de órdenes del usuario",
+            "order-details": "GET /orders/{conversation_id}/{order_id} - Detalles de una orden específica",
+            "regenerate": "GET /regenerate-embeddings?ADMIN_PASSWORD=xxx - Regenerar embeddings",
             "whatsapp": "POST /whatsapp - Webhook de WhatsApp",
             "test-agent": "POST /test-agent - Prueba el agente sin WhatsApp",
             "test-agent-web": "POST /test-agent-web - Agente para frontend web con contexto",
-            "health": "GET /health"
+            "health": "GET /health - Estado de la API"
         }
     }
 
@@ -525,3 +537,447 @@ async def test_agent_web(request: TestAgentWebRequest):
             detail=f"Error procesando solicitud del agente web: {str(e)}"
         )
 
+
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+
+class CheckoutRequest(BaseModel):
+    """Request para crear una sesión de checkout de Stripe"""
+    conversation_id: str = Field(..., description="ID de la conversación (usuario)")
+    user_name: str = Field(..., description="Nombre del usuario")
+    phone_number: str = Field(..., description="Número de teléfono del usuario")
+
+class CheckoutResponse(BaseModel):
+    """Response con la URL de checkout de Stripe"""
+    status: str
+    checkout_url: Optional[str] = None
+    session_id: Optional[str] = None
+    error: Optional[str] = None
+    cart_items_count: int = 0
+    total_amount: float = 0.0
+
+# app/main.py - Endpoint simplificado
+
+@app.post("/create-checkout-session", response_model=CheckoutResponse)
+async def create_checkout_session(request: CheckoutRequest):
+    """
+    Crea una sesión de checkout de Stripe para el carrito del usuario.
+    Solo requiere: conversation_id, user_name, phone_number
+    
+    Ejemplo:
+```json
+    {
+        "conversation_id": "whatsapp-521234567890",
+        "user_name": "Juan Pérez",
+        "phone_number": "+521234567890"
+    }
+```
+    """
+    start_time = time.time()
+    
+    logger.info(
+        "💳 [CHECKOUT] Nueva solicitud - "
+        f"Usuario: '{request.user_name}', "
+        f"Phone: {request.phone_number}"
+    )
+    
+    try:
+        # 1. Buscar carrito del usuario
+        cart_id = get_cart_by_conversation(request.conversation_id)
+        
+        if not cart_id:
+            logger.warning(f"⚠️ No existe carrito para: {request.conversation_id}")
+            return CheckoutResponse(
+                status="error",
+                error="No se encontró un carrito para este usuario",
+                cart_items_count=0,
+                total_amount=0.0
+            )
+        
+        # 2. Obtener items del carrito
+        cart_items = get_cart_items(cart_id)
+        
+        if not cart_items:
+            logger.warning(f"⚠️ Carrito vacío")
+            return CheckoutResponse(
+                status="error",
+                error="El carrito está vacío",
+                cart_items_count=0,
+                total_amount=0.0
+            )
+        
+        # 3. Calcular total
+        total_amount = calculate_cart_total(cart_id)
+        logger.info(f"💰 Total: ${total_amount:.2f} MXN con {len(cart_items)} items")
+        
+        # 4. Crear line_items para Stripe
+        line_items = []
+        for item in cart_items:
+            unit_amount = int(item['price'] * 100)  # Convertir a centavos
+            
+            line_items.append({
+                'price_data': {
+                    'currency': 'mxn',
+                    'product_data': {
+                        'name': item['name'],
+                        'description': f"{item['type']} - {item['color']}" if item['color'] else item['type'],
+                        'images': [item['image_url']] if item['image_url'] else [],
+                    },
+                    'unit_amount': unit_amount,
+                },
+                'quantity': item['quantity'],
+            })
+        
+        # 5. Crear sesión de Stripe (SIN email)
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:8000")
+        
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=line_items,
+            mode='payment',
+            success_url=f"{frontend_url}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{frontend_url}/checkout/cancel",
+            client_reference_id=request.conversation_id,
+            metadata={
+                'conversation_id': request.conversation_id,
+                'user_name': request.user_name,
+                'phone_number': request.phone_number,
+                'cart_id': str(cart_id)
+            },
+            billing_address_collection='required',
+            shipping_address_collection={
+                'allowed_countries': ['MX'],
+            },
+            phone_number_collection={
+                'enabled': True
+            }
+        )
+        
+        total_time = time.time() - start_time
+        
+        logger.info(
+            f"✅ [CHECKOUT] Sesión creada - "
+            f"ID: {checkout_session.id}, "
+            f"Items: {len(cart_items)}, "
+            f"Total: ${total_amount:.2f} MXN, "
+            f"Tiempo: {total_time:.2f}s"
+        )
+        
+        return CheckoutResponse(
+            status="success",
+            checkout_url=checkout_session.url,
+            session_id=checkout_session.id,
+            cart_items_count=len(cart_items),
+            total_amount=total_amount
+        )
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"❌ Error de Stripe: {str(e)}")
+        return CheckoutResponse(
+            status="error",
+            error=f"Error al crear sesión de pago: {str(e)}",
+            cart_items_count=0,
+            total_amount=0.0
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ Error: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+# app/main.py - Agregar después del checkout
+
+class CheckoutSuccessResponse(BaseModel):
+    """Response después de completar el pago"""
+    status: str
+    message: str
+    order_id: Optional[int] = None
+    total_amount: float = 0.0
+    items_count: int = 0
+    error: Optional[str] = None
+
+@app.get("/checkout/success", response_model=CheckoutSuccessResponse)
+async def checkout_success(session_id: str = Query(..., description="Stripe session ID")):
+    """
+    Endpoint de éxito después del pago.
+    Guarda la orden en la BD y vacía el carrito.
+    
+    Se llama automáticamente cuando Stripe redirige después del pago exitoso.
+    URL: /checkout/success?session_id=cs_test_xxx
+    """
+    start_time = time.time()
+    
+    logger.info(f"🎉 [SUCCESS] Procesando pago exitoso - SessionID: {session_id}")
+    
+    try:
+        # 1. Obtener información de la sesión de Stripe
+        session = stripe.checkout.Session.retrieve(
+            session_id,
+            expand=['line_items', 'payment_intent']
+        )
+        
+        if session.payment_status != 'paid':
+            logger.warning(f"⚠️ Sesión no pagada: {session.payment_status}")
+            return CheckoutSuccessResponse(
+                status="error",
+                message="El pago aún no se ha completado",
+                error=f"Payment status: {session.payment_status}"
+            )
+        
+        # 2. Extraer metadata
+        conversation_id = session.client_reference_id
+        user_name = session.metadata.get('user_name', 'Cliente')
+        phone_number = session.metadata.get('phone_number', '')
+        cart_id = int(session.metadata.get('cart_id'))
+        
+        logger.info(f"📋 Datos: Usuario={user_name}, Phone={phone_number}, CartID={cart_id}")
+        
+        # 3. Verificar si ya existe la orden (evitar duplicados)
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT id FROM orders 
+            WHERE stripe_session_id = ?
+        """, [session_id])
+        
+        existing_order = cur.fetchone()
+        
+        if existing_order:
+            logger.warning(f"⚠️ Orden ya existe: ID {existing_order[0]}")
+            
+            # Contar items de la orden existente
+            cur.execute("""
+                SELECT COUNT(*), SUM(subtotal) 
+                FROM order_items 
+                WHERE order_id = ?
+            """, [existing_order[0]])
+            
+            count_result = cur.fetchone()
+            items_count = count_result[0] if count_result else 0
+            total = count_result[1] if count_result else 0.0
+            
+            conn.close()
+            
+            return CheckoutSuccessResponse(
+                status="success",
+                message="Orden ya fue procesada anteriormente",
+                order_id=existing_order[0],
+                total_amount=total,
+                items_count=items_count
+            )
+        
+        # 4. Obtener items del carrito
+        cart_items = get_cart_items(cart_id)
+        total_amount = calculate_cart_total(cart_id)
+        
+        logger.info(f"🛒 Items del carrito: {len(cart_items)}, Total: ${total_amount:.2f}")
+        
+        # 5. Obtener dirección de envío (si existe)
+        shipping_address = None
+        if session.shipping_details:
+            address = session.shipping_details.address
+            shipping_address = f"{address.line1}, {address.city}, {address.state} {address.postal_code}, {address.country}"
+        
+        # 6. Crear orden en la BD
+        cur.execute("""
+            INSERT INTO orders (
+                conversation_id,
+                user_name,
+                phone_number,
+                stripe_session_id,
+                stripe_payment_intent,
+                total_amount,
+                currency,
+                status,
+                shipping_address
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            conversation_id,
+            user_name,
+            phone_number,
+            session_id,
+            session.payment_intent if hasattr(session, 'payment_intent') else None,
+            total_amount,
+            'MXN',
+            'completed',
+            shipping_address
+        ])
+        
+        order_id = cur.lastrowid
+        logger.info(f"✅ Orden creada: ID {order_id}")
+        
+        # 7. Copiar items del carrito a order_items
+        for item in cart_items:
+            cur.execute("""
+                INSERT INTO order_items (
+                    order_id,
+                    article_id,
+                    prod_name,
+                    price_mxn,
+                    quantity,
+                    subtotal
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, [
+                order_id,
+                item['article_id'],
+                item['name'],
+                item['price'],
+                item['quantity'],
+                item['subtotal']
+            ])
+        
+        logger.info(f"📦 {len(cart_items)} items agregados a la orden")
+        
+        # 8. Vaciar el carrito
+        clear_cart(cart_id)
+        logger.info(f"🗑️ Carrito {cart_id} vaciado")
+        
+        conn.commit()
+        conn.close()
+        
+        total_time = time.time() - start_time
+        
+        logger.info(
+            f"🎊 [SUCCESS] Orden completada exitosamente - "
+            f"OrderID: {order_id}, "
+            f"Usuario: {user_name}, "
+            f"Items: {len(cart_items)}, "
+            f"Total: ${total_amount:.2f} MXN, "
+            f"Tiempo: {total_time:.2f}s"
+        )
+        
+        return CheckoutSuccessResponse(
+            status="success",
+            message="¡Pago completado exitosamente! Tu orden ha sido registrada.",
+            order_id=order_id,
+            total_amount=total_amount,
+            items_count=len(cart_items)
+        )
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"❌ Error de Stripe en success: {str(e)}")
+        return CheckoutSuccessResponse(
+            status="error",
+            message="Error verificando el pago",
+            error=str(e)
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ Error procesando orden: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/checkout/cancel")
+async def checkout_cancel():
+    """
+    Endpoint cuando el usuario cancela el pago
+    """
+    logger.info("❌ [CANCEL] Usuario canceló el pago")
+    
+    return {
+        "status": "cancelled",
+        "message": "Pago cancelado. Tu carrito sigue disponible."
+    }
+
+# Historial de órdenes
+
+@app.get("/orders/{conversation_id}")
+async def get_user_orders(conversation_id: str):
+    """
+    Obtiene todas las órdenes de un usuario
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT 
+            o.id,
+            o.stripe_session_id,
+            o.total_amount,
+            o.status,
+            o.created_at,
+            COUNT(oi.id) as items_count
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.conversation_id = ?
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+    """, [conversation_id])
+    
+    orders = []
+    for row in cur.fetchall():
+        orders.append({
+            "order_id": row[0],
+            "session_id": row[1],
+            "total": row[2],
+            "status": row[3],
+            "date": row[4],
+            "items_count": row[5]
+        })
+    
+    conn.close()
+    
+    return {
+        "conversation_id": conversation_id,
+        "orders_count": len(orders),
+        "orders": orders
+    }
+
+
+@app.get("/orders/{conversation_id}/{order_id}")
+async def get_order_details(conversation_id: str, order_id: int):
+    """
+    Obtiene detalles completos de una orden específica
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    # Verificar que la orden pertenece al usuario
+    cur.execute("""
+        SELECT 
+            id, user_name, phone_number, total_amount, 
+            status, shipping_address, created_at
+        FROM orders
+        WHERE id = ? AND conversation_id = ?
+    """, [order_id, conversation_id])
+    
+    order = cur.fetchone()
+    
+    if not order:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    
+    # Obtener items de la orden
+    cur.execute("""
+        SELECT 
+            article_id, prod_name, price_mxn, quantity, subtotal
+        FROM order_items
+        WHERE order_id = ?
+    """, [order_id])
+    
+    items = []
+    for row in cur.fetchall():
+        items.append({
+            "article_id": row[0],
+            "name": row[1],
+            "price": row[2],
+            "quantity": row[3],
+            "subtotal": row[4]
+        })
+    
+    conn.close()
+    
+    return {
+        "order_id": order[0],
+        "user_name": order[1],
+        "phone_number": order[2],
+        "total_amount": order[3],
+        "status": order[4],
+        "shipping_address": order[5],
+        "created_at": order[6],
+        "items": items
+    }
