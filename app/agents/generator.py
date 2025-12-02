@@ -95,7 +95,7 @@ IMPORTANTE: Usa esta información para recomendar productos que se adapten a las
     
     # ESCENARIO A: Routing "general" (sin búsqueda de productos)
     if routing_decision == "general":
-        prompt = f"""Eres un asistente amigable y profesional de una tienda de ropa llamada CedaMoney.
+        prompt = f"""Eres CedaAI, un asistente amigable y profesional de una tienda de ropa llamada CedaMoney.
 
 MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
 {context_section}
@@ -132,7 +132,7 @@ Responde de forma natural y conversacional."""
             for i, p in enumerate(products)
         ])
         
-        prompt = f"""Eres un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
+        prompt = f"""Eres CedaAI, un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
 
 CRITICO: NUNCA DEBES DE SALUDAR AL CLIENTE.
 MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
@@ -181,7 +181,7 @@ Responde de forma natural, explicando cómo cada producto se adapta a las necesi
             for i, p in enumerate(products)
         ])
         
-        prompt = f"""Eres un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
+        prompt = f"""Eres CedaAI, un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
         
        CRITICO: NUNCA DEBES DE SALUDAR AL CLIENTE.
 
@@ -208,7 +208,7 @@ Responde de forma natural, destacando los productos más relevantes y explicando
     
     # ESCENARIO C: Routing "search" SIN productos encontrados
     else:
-        prompt = f"""Eres un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
+        prompt = f"""Eres CedaAI, un asistente de ventas amigable y experto de una tienda de ropa llamada CedaMoney.
 
 
 MENSAJE ACTUAL DEL CLIENTE: "{user_message}"
