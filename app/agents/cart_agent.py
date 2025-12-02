@@ -498,48 +498,47 @@ def parse_advanced_removal_request(
         ]
     )
     
-    prompt = f"""Eres un agente experto que interpreta solicitudes de eliminación de productos del carrito de compras.
+    prompt = f"""Eres un agente experto que interpreta solicitudes de eliminación de productos del carrito.
 
 MENSAJE DEL USUARIO:
 "{user_message}"
 
-PRODUCTOS EN EL CARRITO:
+PRODUCTOS EN EL CARRITO (analiza TODOS los campos para encontrar coincidencias):
 {cart_text}
 
-Tu tarea es analizar QUÉ productos quiere eliminar el usuario. Las solicitudes pueden ser:
+CÓMO IDENTIFICAR PRODUCTOS:
+- Busca coincidencias en CUALQUIER campo: Nombre, Tipo, Categoría, Color
+- "socks/calcetines" → busca "sock" en Nombre O Tipo O Categoría
+- "jeans" → busca "jean", "denim", "pants" en cualquier campo
+- "tops" → camisetas, camisas, blusas, sweaters, hoodies, t-shirts
+- "bottoms" → jeans, pantalones, shorts, faldas, pants, trousers
+- "outerwear" → chamarras, abrigos, jackets, coats
+- "accessories" → calcetines, socks, gorras, bufandas, cinturones
 
-1. **Por nombre específico**: "quita el suéter blanco", "elimina la camisa azul"
-2. **Por categoría/grupo**: "quita todos los jeans", "elimina todos los bottoms", "quita todas las faldas"
-3. **Por tipo de prenda**: "quita todas las camisetas", "elimina todos los vestidos"
-4. **Por color**: "quita todo lo rojo", "elimina las prendas azules"
-5. **Por precio**: "quita todo lo que cueste menos de 500", "elimina las prendas más caras de 1000"
-6. **Cantidad parcial**: "quita 3 de mis 5 sweaters", "elimina 2 camisas de las 4 que tengo"
-7. **Todos**: "vacía el carrito", "quita todo"
+TIPOS DE ELIMINACIÓN:
+1. Por nombre: "quita el suéter blanco"
+2. Por tipo/categoría: "quita los socks", "elimina todas las camisetas"
+3. Por color: "quita todo lo rojo"
+4. Por precio: "quita lo que cueste menos de 500"
+5. Cantidad parcial: "quita 3 de mis 5 sweaters"
+6. Todo: "vacía el carrito"
 
-INSTRUCCIONES:
-1. Identifica qué productos del carrito coinciden con la solicitud del usuario
-2. Para cada producto que coincida, incluye su article_id en la lista
-3. Si es una eliminación parcial de cantidad, indica la nueva cantidad que debe quedar
-4. Si la solicitud es ambigua, establece needs_confirmation = true
-5. Si no hay coincidencias claras, devuelve items_to_remove vacío
-
-Responde SOLO con un JSON válido:
+Responde SOLO con JSON válido:
 {{
-  "removal_type": "all" | "by_category" | "by_type" | "by_price" | "by_color" | "by_name" | "partial_quantity" | "specific" | "none",
+  "removal_type": "all" | "by_category" | "by_type" | "by_price" | "by_color" | "by_name" | "partial_quantity" | "none",
   "items_to_remove": ["article_id1", "article_id2", ...],
-  "quantity_changes": {{"article_id": new_quantity, ...}},
-  "description": "Descripción breve de lo que se eliminará",
-  "matched_items_summary": "Lista resumida de items que coinciden",
-  "confidence": 0.0 a 1.0,
+  "quantity_changes": {{"article_id": nueva_cantidad, ...}},
+  "description": "Descripción breve",
+  "matched_items_summary": "Items que coinciden",
+  "confidence": 0.0-1.0,
   "needs_confirmation": true | false
 }}
 
-IMPORTANTE:
-- Para "partial_quantity", usa quantity_changes para indicar la nueva cantidad (no la cantidad a quitar)
-- Por ejemplo, si hay 5 sweaters y el usuario quiere quitar 3, quantity_changes debería ser {{"article_id": 2}}
-- Si el usuario quiere quitar TODO de un producto, inclúyelo en items_to_remove (no en quantity_changes)
-- Sé inteligente con sinónimos: "bottoms" incluye jeans, pantalones, shorts, faldas, etc.
-- "tops" incluye camisetas, camisas, blusas, sweaters, etc."""
+REGLAS:
+- Busca términos en INGLÉS y ESPAÑOL (sock=calcetín, shirt=camisa, pants=pantalón)
+- Si el Tipo dice "Socks" y el usuario pide "socks", ESO ES UNA COINCIDENCIA
+- Para cantidad parcial: quantity_changes = nueva cantidad que QUEDA (no lo que se quita)
+- Si hay duda, needs_confirmation = true"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -679,10 +678,8 @@ def handle_cart_interaction(
         cart_items = get_cart(conversation_id)
         if not cart_items:
             response = (
-                "Por ahora tu carrito está vacío. 🛒\n\n"
-                "Cuando veas productos que te gusten, puedes decirme:\n"
-                "• \"Agrega el producto 1\"\n"
-                "• \"Quiero el suéter azul\""
+                "Tu carrito está vacío por ahora 🛒\n\n"
+                "Cuando encuentres algo que te guste, solo dime y lo agrego."
             )
             return {"handled": True, "response": response, "products": [], "send_images": False}
 
@@ -698,7 +695,7 @@ def handle_cart_interaction(
         
         # Return cart items for image display
         return {
-            "handled": True, 
+            "handled": True,
             "response": response, 
             "products": [],
             "send_images": True,
@@ -798,25 +795,15 @@ def handle_cart_interaction(
             total = calculate_cart_total(cart_id) if cart_id else 0.0
             
             response = (
-                f"¡Perfecto! Tu carrito con {cart_count} producto(s) sigue guardado. 🛒\n"
-                f"💰 Total actual: ${total:.2f} MXN\n\n"
-                "Puedes seguir explorando:\n"
-                "• \"Busco vestidos rojos\"\n"
-                "• \"Muéstrame jeans\"\n"
-                "• \"¿Tienes camisetas?\"\n\n"
-                "O gestionar tu carrito:\n"
-                "• \"Ver carrito\" - Ver productos guardados\n"
-                "• \"Quita el producto 1\" - Modificar items\n"
-                "• \"Proceder al pago\" - Cuando estés listo"
+                f"¡Claro! Tu carrito sigue guardado con {cart_count} producto(s) "
+                f"(${total:.2f} MXN) 🛒\n\n"
+                f"¿Qué más te gustaría buscar? Puedes pedirme lo que necesites "
+                f"o decirme cuando quieras pagar."
             )
         else:
             response = (
-                "¡Perfecto! Puedes seguir explorando productos. 🛍️\n\n"
-                "Dime qué estás buscando:\n"
-                "• \"Busco vestidos rojos\"\n"
-                "• \"Muéstrame jeans\"\n"
-                "• \"¿Tienes camisetas?\"\n\n"
-                "Cuando encuentres algo que te guste, dime \"agrega el producto 1\""
+                "¡Perfecto! ¿Qué te gustaría buscar? 🛍️\n\n"
+                "Dime qué tienes en mente y te ayudo a encontrarlo."
             )
         
         return {"handled": True, "response": response, "products": [], "send_images": False}
@@ -857,8 +844,8 @@ def handle_cart_interaction(
         logger.info(f"✅ Carrito vaciado - {items_count} items eliminados")
         
         response = (
-            "✅ Tu carrito ha sido vaciado completamente.\n\n"
-            "¿Qué te gustaría buscar ahora?"
+            f"Listo, vacié tu carrito ({items_count} productos eliminados). 🛒\n\n"
+            f"¿Empezamos de nuevo? Dime qué te gustaría buscar."
         )
         return {"handled": True, "response": response, "products": [], "send_images": False}
 
@@ -895,21 +882,17 @@ def handle_cart_interaction(
             # Fallback: mostrar el carrito para que el usuario pueda especificar
             cart_list = []
             for i, item in enumerate(cart_items, start=1):
+                item_type = item.get('product_type_name', '')
                 cart_list.append(
-                    f"{i}. *{item['prod_name']}* ({item['colour_group_name']}) - "
+                    f"{i}. *{item['prod_name']}* ({item['colour_group_name']}) - {item_type} - "
                     f"${item['price_mxn']:.2f} MXN x{item['quantity']}"
                 )
             cart_text = "\n".join(cart_list)
             
             response = (
-                f"No encontré productos que coincidan con tu solicitud en el carrito.\n\n"
-                f"Tu carrito actual:\n{cart_text}\n\n"
-                f"Puedes decirme:\n"
-                f"• \"Quita el producto 1\" (por número)\n"
-                f"• \"Quita los jeans\" (por nombre/tipo)\n"
-                f"• \"Quita todo lo rojo\" (por color)\n"
-                f"• \"Quita lo que cueste menos de 500\" (por precio)\n"
-                f"• \"Quita 2 de los sweaters\" (cantidad parcial)"
+                f"Mmm, no encontré eso en tu carrito. 🤔\n\n"
+                f"Esto es lo que tienes:\n{cart_text}\n\n"
+                f"¿Cuál quieres que quite?"
             )
             return {"handled": True, "response": response, "products": [], "send_images": False}
         
@@ -931,22 +914,22 @@ def handle_cart_interaction(
             for article_id in removal_result["items_to_remove"]:
                 item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
                 if item:
-                    affected_items.append(f"• Eliminar: *{item['prod_name']}* ({item['colour_group_name']})")
+                    affected_items.append(f"- {item['prod_name']} ({item['colour_group_name']})")
             
             for article_id, new_qty in removal_result["quantity_changes"].items():
                 item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
                 if item:
+                    qty_to_remove = item['quantity'] - int(new_qty)
                     affected_items.append(
-                        f"• Reducir: *{item['prod_name']}* de {item['quantity']} a {new_qty} unidades"
+                        f"- {qty_to_remove} de tus {item['quantity']} {item['prod_name']}"
                     )
             
             affected_text = "\n".join(affected_items) if affected_items else removal_result.get("description", "productos")
             
             response = (
-                f"⚠️ Voy a realizar estos cambios en tu carrito:\n\n"
+                f"Voy a quitar esto de tu carrito:\n\n"
                 f"{affected_text}\n\n"
-                f"¿Confirmas que quieres hacer esto?\n"
-                f"Responde \"sí\" para confirmar o \"no\" para cancelar."
+                f"¿Está bien?"
             )
             
             # Store the pending removal for confirmation
@@ -963,36 +946,31 @@ def handle_cart_interaction(
             f"Detalles: {execution_result['details']}"
         )
         
-        # Construir mensaje de respuesta
-        response_parts = ["✅ *Cambios realizados en tu carrito:*\n"]
+        # Construir mensaje de respuesta natural
+        removed_count = len(execution_result["removed_names"])
+        updated_count = len(execution_result["updated_names"])
         
-        if execution_result["removed_names"]:
-            response_parts.append("*Eliminados:*")
-            for name in execution_result["removed_names"]:
-                response_parts.append(f"  • {name}")
-        
-        if execution_result["updated_names"]:
-            response_parts.append("\n*Cantidades actualizadas:*")
-            for update in execution_result["updated_names"]:
-                response_parts.append(f"  • {update}")
+        if removed_count == 1 and updated_count == 0:
+            removed_name = execution_result["removed_names"][0]
+            response = f"Listo, quité {removed_name} de tu carrito. ✅"
+        elif removed_count > 1:
+            response = f"Listo, quité {removed_count} productos de tu carrito. ✅"
+        elif updated_count > 0:
+            response = f"Listo, actualicé las cantidades. ✅"
+        else:
+            response = "Listo, hice los cambios. ✅"
         
         # Mostrar resumen del carrito actualizado
         updated_cart = get_cart(conversation_id)
         if updated_cart:
             cart_id = get_cart_by_conversation(conversation_id)
             new_total = calculate_cart_total(cart_id) if cart_id else 0.0
-            response_parts.append(f"\n💰 *Nuevo total:* ${new_total:.2f} MXN ({len(updated_cart)} productos)")
+            response += f"\n\nTu carrito ahora tiene {len(updated_cart)} producto(s) (${new_total:.2f} MXN)."
         else:
-            response_parts.append("\n🛒 Tu carrito ahora está vacío.")
+            response += "\n\nTu carrito quedó vacío."
         
-        response_parts.append(
-            "\n¿Qué deseas hacer?\n"
-            "• \"Ver carrito\" - Ver detalles\n"
-            "• \"Seguir comprando\" - Buscar más\n"
-            "• \"Proceder al pago\" - Si estás listo"
-        )
+        response += "\n\n¿Algo más?"
         
-        response = "\n".join(response_parts)
         return {"handled": True, "response": response, "products": [], "send_images": False}
 
     # Agregar al carrito usando posición de producto reciente
@@ -1008,10 +986,8 @@ def handle_cart_interaction(
             return {
                 "handled": True,
                 "response": (
-                    "Aún no tengo productos recientes asociados a esta conversación. 🔍\n\n"
-                    "Primero busca productos (ej: \"Busco vestidos rojos\") y luego podrás:\n"
-                    "• \"Agrega el producto 1\"\n"
-                    "• \"Quiero el suéter blanco\""
+                    "Todavía no te he mostrado productos. 🔍\n\n"
+                    "Dime qué estás buscando y te muestro opciones."
                 ),
                 "products": [],
                 "send_images": False,
@@ -1043,20 +1019,15 @@ def handle_cart_interaction(
 
                 if not search_query:
                     max_idx = max(p["position"] for p in recent) if recent else 0
-                    products_list = []
-                    for p in recent[:5]:
-                        products_list.append(
-                            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
-                        )
+                    products_list = [f"{p['prod_name']}" for p in recent[:5]]
                     products_text = ", ".join(products_list)
                     
                     return {
                         "handled": True,
                         "response": (
-                            "No pude identificar exactamente qué producto quieres agregar. "
-                            f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
-                            "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
-                            f"Productos disponibles: {products_text}"
+                            f"No estoy seguro cuál quieres agregar. 🤔\n\n"
+                            f"Te mostré: {products_text}\n\n"
+                            f"¿Cuál te interesa?"
                         ),
                         "products": [],
                         "send_images": False,
@@ -1070,10 +1041,8 @@ def handle_cart_interaction(
                     return {
                         "handled": True,
                         "response": (
-                            "He buscado en nuestro catálogo y no encontré un producto que coincida "
-                            "claramente con lo que mencionas. "
-                            "Puede que ese modelo específico no exista en nuestra tienda. "
-                            "Si quieres, puedo sugerirte alternativas similares."
+                            "No encontré ese producto en nuestro catálogo. 😕\n\n"
+                            "¿Quieres que busque algo parecido?"
                         ),
                         "products": [],
                         "send_images": False,
@@ -1082,15 +1051,12 @@ def handle_cart_interaction(
                 # Guardar estos productos como recientes para futuras referencias (Producto 1, etc.)
                 save_recent_products(conversation_id, catalog_products)
 
-                # Mostrar al usuario la mejor coincidencia y pedir confirmación explícita
+                # Mostrar al usuario la mejor coincidencia
                 best = catalog_products[0]
                 response = (
-                    "No encontré ese producto exacto entre los últimos que vimos, "
-                    "pero en el catálogo encontré esta opción que parece coincidir con lo que dices:\n\n"
-                    f"Producto 1: {best['prod_name']} ({best['colour_group_name']}) - "
-                    f"{best['product_group_name']} - ${best['price_mxn']:.2f} MXN.\n\n"
-                    "Si quieres que lo agregue al carrito, puedes decirme por ejemplo "
-                    "\"agrega el producto 1 al carrito\" o \"sí, agrega ese producto\"."
+                    f"Encontré esto que podría ser lo que buscas:\n\n"
+                    f"*{best['prod_name']}* ({best['colour_group_name']}) - ${best['price_mxn']:.2f} MXN\n\n"
+                    f"¿Lo agrego a tu carrito?"
                 )
 
                 # Send the found product with image
@@ -1112,22 +1078,18 @@ def handle_cart_interaction(
             return {
                 "handled": True,
                 "response": (
-                    f"No encontré el producto {resolved_index if resolved_index else 'mencionado'}. "
-                    f"En este momento solo tengo disponibles los productos del 1 al {max_idx} "
-                    "de la última lista que te mostré."
+                    f"No encontré ese producto en la lista. Solo tengo {max_idx} productos para mostrarte. "
+                    f"¿Cuál te interesa?"
                 ),
                 "products": [],
                 "send_images": False,
             }
 
-        # Si el modelo indica que necesita confirmación o la confianza es baja, NO modificamos el carrito
+        # Si el modelo indica que necesita confirmación o la confianza es baja
         if needs_confirmation or confidence < 0.8:
             response = (
-                f"Entiendo que te refieres al Producto {resolved_index}: {product['prod_name']} "
-                f"({product['colour_group_name']}). "
-                "Solo para confirmar, ¿quieres que agregue ese producto a tu carrito? "
-                "Puedes decirme \"sí, agrega el producto "
-                f"{resolved_index} al carrito\" o simplemente \"sí\"."
+                f"¿Te refieres a *{product['prod_name']}* ({product['colour_group_name']})?\n\n"
+                f"¿Lo agrego?"
             )
             return {"handled": True, "response": response, "products": [], "send_images": False}
 
@@ -1142,7 +1104,7 @@ def handle_cart_interaction(
         )
         
         # Show the added product with image
-        response = f"✅ He agregado al carrito:"
+        response = f"¡Agregado! ✅"
         
         added_product = {
             "prod_name": product['prod_name'],

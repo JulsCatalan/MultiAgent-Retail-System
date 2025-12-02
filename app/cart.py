@@ -638,34 +638,36 @@ def format_cart_summary(cart_items: List[Dict], total: float) -> str:
         Mensaje formateado para WhatsApp
     """
     if not cart_items:
-        return "Tu carrito está vacío. 🛒\n\nBusca productos y dime cuál quieres agregar."
+        return "Tu carrito está vacío. 🛒\n\nDime qué buscas y te ayudo."
     
     items_text = []
     for i, item in enumerate(cart_items, 1):
         price = item.get('price') or item.get('price_mxn', 0)
         subtotal = price * item['quantity']
         name = item.get('name') or item.get('prod_name', 'Producto')
-        color = item.get('color') or item.get('colour_group_name', 'N/A')
-        items_text.append(
-            f"{i}. *{name}* ({color})\n"
-            f"   Cantidad: {item['quantity']} | Subtotal: ${subtotal:.2f} MXN"
-        )
+        color = item.get('color') or item.get('colour_group_name', '')
+        item_type = item.get('type') or item.get('product_type_name', '')
+        
+        # Build item line with type for better category recognition
+        item_line = f"{i}. *{name}*"
+        if color:
+            item_line += f" ({color})"
+        if item_type:
+            item_line += f" - {item_type}"
+        item_line += f"\n   x{item['quantity']} = ${subtotal:.2f} MXN"
+        
+        items_text.append(item_line)
     
     items_section = "\n\n".join(items_text)
     
-    message = f"""🛒 *TU CARRITO ACTUAL*
+    message = f"""🛒 *Tu carrito:*
 
 {items_section}
 
 ━━━━━━━━━━━━━━━━━━
-💰 *TOTAL: ${total:.2f} MXN*
-━━━━━━━━━━━━━━━━━━
+💰 *Total: ${total:.2f} MXN*
 
-¿Qué deseas hacer?
-• "Proceder al pago" - Para finalizar compra
-• "Agregar más productos" - Para seguir comprando
-• "Quitar producto X" - Para eliminar un item
-• "Vaciar carrito" - Para empezar de nuevo"""
+¿Listo para pagar o quieres seguir viendo?"""
     
     return message
 
