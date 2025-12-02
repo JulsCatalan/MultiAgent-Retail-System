@@ -57,6 +57,7 @@ def detect_cart_intent_llm(
     user_message: str,
     recent_products: List[Dict[str, Any]],
     conversation_context: Optional[List[ConversationMessage]] = None,
+    cart_items: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Agente LLM que detecta la intención del usuario respecto al carrito.
@@ -78,6 +79,22 @@ def detect_cart_intent_llm(
     else:
         products_text = "No hay productos recientes asociados a esta conversación."
 
+    # Formatear items del carrito actual
+    if cart_items:
+        cart_text = "\n".join(
+            [
+                f"Item {i+1}: {item['prod_name']} ({item['colour_group_name']}) - {item['product_type_name']}"
+                for i, item in enumerate(cart_items)
+            ]
+        )
+        cart_section = f"""
+
+PRODUCTOS ACTUALMENTE EN EL CARRITO DEL USUARIO:
+{cart_text}
+"""
+    else:
+        cart_section = "\nEl carrito del usuario está vacío."
+
     # Formatear contexto reciente de conversación
     context_text = _format_conversation_context_for_cart(conversation_context)
     context_section = ""
@@ -88,45 +105,34 @@ CONVERSACIÓN RECIENTE:
 {context_text}
 """
 
-    prompt = f"""Eres un agente que interpreta la intención del usuario en una tienda de ropa (CedaMoney).
-
-Tu tarea es decidir si el usuario quiere:
-- SOLO hablar o preguntar sobre productos (información general)
-- VER su carrito actual
-- AGREGAR un producto específico de la lista reciente al carrito
-- QUITAR/ELIMINAR un producto del carrito
-- PROCEDER AL PAGO / CHECKOUT (finalizar compra)
-- SEGUIR COMPRANDO / MODIFICAR CARRITO (después de ver checkout)
-- VACIAR el carrito completamente
+    prompt = f"""Eres un agente que interpreta la intención del usuario en una tienda de ropa.
 
 MENSAJE DEL USUARIO:
 "{user_message}"
 
-PRODUCTOS RECIENTES MOSTRADOS AL USUARIO:
+PRODUCTOS RECIENTES (mostrados al usuario):
 {products_text}
+{cart_section}
 {context_section}
 
-REGLAS:
-1. Si el usuario solo describe gustos o hace preguntas sobre productos, pero NO habla explícitamente de carrito:
-   - mode = "none"
+REGLAS IMPORTANTES:
+1. mode = "none" → Solo si habla de productos SIN mencionar carrito ni querer agregar/quitar
 
-2. Si el usuario quiere ver su carrito ("ver carrito", "qué tengo", "muéstrame el carrito"):
-   - mode = "show_cart"
+2. mode = "show_cart" → "ver carrito", "qué tengo", "muéstrame el carrito"
 
-3. Si el usuario quiere AGREGAR un producto ("agrega el producto X", "quiero el suéter blanco"):
-   - mode = "add_to_cart"
-   - product_index = número del producto en la lista reciente (1, 2, 3, ...) SI se puede inferir.
+3. mode = "add_to_cart" → SOLO si el producto NO está en el carrito y usa palabras como "agrega", "quiero", "añade"
+   - product_index = número del producto en la lista reciente
 
-4. Si el usuario quiere QUITAR/ELIMINAR productos del carrito - INCLUYE TODAS estas variantes:
-   - Por número: "quita el producto 1", "elimina el producto 2"
-   - Por nombre: "quita los jeans", "elimina el sweater azul", "quita esa camisa"
-   - Por categoría: "quita todos los bottoms", "elimina todas las faldas", "quita todos los tops"
-   - Por color: "quita todo lo rojo", "elimina las prendas azules"
-   - Por precio: "quita lo que cueste menos de 500", "elimina lo más caro"
-   - Cantidad parcial: "quita 3 de los 5 sweaters", "elimina 2 camisas"
-   - Múltiples: "quita los jeans y las camisetas"
-   → mode = "remove_from_cart"
-   - product_index = número del producto EN EL CARRITO (1, 2, 3, ...) SI es por número, NULL si es otra forma
+4. mode = "remove_from_cart" → SI CUALQUIERA de estas condiciones se cumple:
+   - Usa palabras: "quita", "elimina", "remove", "saca", "borra"
+   - Menciona NÚMEROS solos ("2 y 3", "1, 2", "el 2") → SIEMPRE es eliminar del carrito
+   - Menciona nombres de productos que YA ESTÁN EN EL CARRITO → es eliminar
+   - Menciona categorías: "tops", "blusas", "bottoms", "shorts"
+   - Menciona colores o precios para filtrar
+   
+   CLAVE: Si el usuario dice "EDC vanilla blouse" y ese producto ESTÁ en el carrito → ELIMINAR, no agregar
+   CLAVE: Si dice "2 y 3" después de ver el carrito → ELIMINAR items 2 y 3
+   - product_index = NULL (el parser avanzado lo maneja)
 
 5. Si el usuario quiere PROCEDER AL PAGO ("pagar", "checkout", "proceder al pago", "comprar", "finalizar compra", "quiero pagar", "pagar ahora"):
    - mode = "checkout"
@@ -498,47 +504,47 @@ def parse_advanced_removal_request(
         ]
     )
     
-    prompt = f"""Eres un agente experto que interpreta solicitudes de eliminación de productos del carrito.
+    prompt = f"""Eres un agente que interpreta qué productos quiere ELIMINAR el usuario de su carrito.
 
 MENSAJE DEL USUARIO:
 "{user_message}"
 
-PRODUCTOS EN EL CARRITO (analiza TODOS los campos para encontrar coincidencias):
+PRODUCTOS EN EL CARRITO:
 {cart_text}
 
-CÓMO IDENTIFICAR PRODUCTOS:
-- Busca coincidencias en CUALQUIER campo: Nombre, Tipo, Categoría, Color
-- "socks/calcetines" → busca "sock" en Nombre O Tipo O Categoría
-- "jeans" → busca "jean", "denim", "pants" en cualquier campo
-- "tops" → camisetas, camisas, blusas, sweaters, hoodies, t-shirts
-- "bottoms" → jeans, pantalones, shorts, faldas, pants, trousers
-- "outerwear" → chamarras, abrigos, jackets, coats
-- "accessories" → calcetines, socks, gorras, bufandas, cinturones
+CATEGORÍAS DE ROPA (¡MUY IMPORTANTE!):
+- "tops" = CUALQUIER prenda de arriba: Blouse, Blusa, Shirt, Camisa, T-shirt, Camiseta, Sweater, Hoodie, Top, Tank
+- "bottoms" = CUALQUIER prenda de abajo: Shorts, Jeans, Pants, Pantalón, Skirt, Falda, Trousers
+- "socks/calcetines" = Socks, Ankle Socks, Calcetines
+- "outerwear" = Jacket, Coat, Chamarra, Abrigo
 
-TIPOS DE ELIMINACIÓN:
-1. Por nombre: "quita el suéter blanco"
-2. Por tipo/categoría: "quita los socks", "elimina todas las camisetas"
-3. Por color: "quita todo lo rojo"
-4. Por precio: "quita lo que cueste menos de 500"
-5. Cantidad parcial: "quita 3 de mis 5 sweaters"
-6. Todo: "vacía el carrito"
+FORMAS DE PEDIR ELIMINACIÓN:
+1. Por NÚMERO: "2 y 3", "el 1", "1, 2", "quita 2 y 3" → USA LOS NÚMEROS DE ITEM
+2. Por NOMBRE: "quita EDC vanilla", "elimina Milli" → BUSCA EN EL NOMBRE
+3. Por CATEGORÍA: "quita los tops", "elimina las blusas" → BUSCA EN TIPO
+4. Por COLOR: "quita lo blanco" → BUSCA EN COLOR
+5. Por PRECIO: "quita lo menor a 500" → COMPARA PRECIO
 
-Responde SOLO con JSON válido:
+REGLAS CRÍTICAS:
+1. Si el usuario dice "2 y 3" o "1, 2" → son NÚMEROS DE ITEM, elimina Item 2 y Item 3
+2. Si dice "tops" y hay "Blouse" en Tipo → ESO ES UN TOP, elimínalo
+3. Si dice un nombre parcial como "EDC" y hay "EDC VANILLA BLOUSE" → COINCIDE
+4. SIEMPRE devuelve los article_id de los items que coinciden
+
+Responde SOLO JSON:
 {{
-  "removal_type": "all" | "by_category" | "by_type" | "by_price" | "by_color" | "by_name" | "partial_quantity" | "none",
-  "items_to_remove": ["article_id1", "article_id2", ...],
-  "quantity_changes": {{"article_id": nueva_cantidad, ...}},
-  "description": "Descripción breve",
-  "matched_items_summary": "Items que coinciden",
+  "removal_type": "by_number" | "by_name" | "by_category" | "by_color" | "by_price" | "all" | "none",
+  "items_to_remove": ["article_id1", "article_id2"],
+  "quantity_changes": {{}},
+  "description": "Qué se va a eliminar",
   "confidence": 0.0-1.0,
-  "needs_confirmation": true | false
+  "needs_confirmation": false
 }}
 
-REGLAS:
-- Busca términos en INGLÉS y ESPAÑOL (sock=calcetín, shirt=camisa, pants=pantalón)
-- Si el Tipo dice "Socks" y el usuario pide "socks", ESO ES UNA COINCIDENCIA
-- Para cantidad parcial: quantity_changes = nueva cantidad que QUEDA (no lo que se quita)
-- Si hay duda, needs_confirmation = true"""
+EJEMPLOS:
+- Usuario: "2 y 3" con items 1,2,3 → eliminar article_id del Item 2 y Item 3
+- Usuario: "tops" con Blouse en carrito → eliminar porque Blouse ES un top
+- Usuario: "EDC vanilla blouse" → buscar ese nombre exacto"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -659,14 +665,24 @@ def handle_cart_interaction(
         - products: list -> Lista de productos a devolver (opcional)
     """
     recent = get_recent_products(conversation_id)
-    intent = detect_cart_intent_llm(user_message, recent, conversation_context=conversation_context)
+    
+    # Get current cart items for smarter intent detection
+    current_cart = get_cart(conversation_id)
+    
+    intent = detect_cart_intent_llm(
+        user_message, 
+        recent, 
+        conversation_context=conversation_context,
+        cart_items=current_cart
+    )
     mode = intent["mode"]
     
     logger.info(
         f"🛒 [CART-AGENT] Intent detectado - "
         f"Mode: {mode}, "
         f"ConvID: {conversation_id}, "
-        f"Confidence: {intent.get('confidence', 0.0):.2f}"
+        f"Confidence: {intent.get('confidence', 0.0):.2f}, "
+        f"Cart items: {len(current_cart) if current_cart else 0}"
     )
 
     if mode == "none":
