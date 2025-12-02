@@ -120,17 +120,22 @@ REGLAS IMPORTANTES:
 
 2. mode = "show_cart" → "ver carrito", "qué tengo", "muéstrame el carrito"
 
-3. mode = "add_to_cart" → Si quiere agregar producto(s)
-   - product_index = número si es uno solo, NULL si son varios o descripción
+3. mode = "add_to_cart" → Si quiere agregar SOLO UN producto
+   - "agrega el 1", "añade la camisa", "el 3" (cuando quiere agregar)
+   - product_index = número del producto
 
 4. mode = "remove_from_cart" → Si quiere quitar producto(s) del carrito
-   - Palabras clave: "quita", "elimina", "remove", "saca", "borra", o números del carrito
-   - IMPORTANTE: "2", "el 2", "quita 2", "2 y 3", "quita el producto 2" → TODO es remove_from_cart
-   - Si dice números solos después de ver el carrito → es quitar
+   - Palabras clave: "quita", "elimina", "remove", "saca", "borra"
+   - Si menciona números después de ver el carrito sin "agrega" → quitar
 
-5. mode = "multi_action" → SOLO si mezcla AGREGAR Y QUITAR en la misma oración
-   - "quita el 2 pero agrega el 3" → multi_action
-   - "elimina eso y agrega la camisa" → multi_action
+5. mode = "multi_action" → Si menciona MÚLTIPLES productos con "y", ",", "también", o mezcla add+remove:
+   - "agrega el 1 y el 5" → multi_action (MÚLTIPLES ADDS)
+   - "agrega el 1, 2 y 3" → multi_action (MÚLTIPLES ADDS)
+   - "quita el 2 y el 4" → multi_action (MÚLTIPLES REMOVES)
+   - "quita el rojo y agrega el azul" → multi_action (MIX)
+   - "la camisa y el pantalón" → multi_action (MÚLTIPLES)
+   
+   CLAVE: Si hay "y", "," entre números/productos → SIEMPRE multi_action
 
 6. mode = "checkout" → "pagar", "checkout", "proceder al pago", "comprar", "finalizar"
 
@@ -139,20 +144,17 @@ REGLAS IMPORTANTES:
 8. mode = "clear_cart" → "vaciar carrito", "eliminar todo", "borrar carrito"
 
 9. mode = "confirm_action" → "sí", "si", "ok", "dale", "confirmo", "está bien", "correcto"
-   - SOLO cuando parece que está confirmando algo previo
 
 10. NUNCA inventes productos.
 
-EJEMPLOS REMOVE_FROM_CART (UNO O VARIOS):
-- "2" → remove_from_cart (quitar item 2)
-- "1 y 3" → remove_from_cart (quitar items 1 y 3)
-- "quita la blusa" → remove_from_cart
-- "quita el 2 y el 4" → remove_from_cart
-- "elimina los calcetines" → remove_from_cart
-
-EJEMPLOS MULTI_ACTION (MEZCLA ADD+REMOVE):
-- "quita el rojo y agrega el azul" → multi_action
-- "elimina el 2 pero agrega la camisa" → multi_action
+EJEMPLOS IMPORTANTES:
+- "agrega el 1" → add_to_cart (UNO solo)
+- "agrega el 1 y el 5" → multi_action (MÚLTIPLES)
+- "1 y 3" → multi_action (MÚLTIPLES - determinar si add o remove por contexto)
+- "el 1, 2 y 5" → multi_action
+- "quita el 2" → remove_from_cart (UNO solo)
+- "quita 1 y 3" → multi_action (MÚLTIPLES removes)
+- "quita el 2 pero agrega el 4" → multi_action (MIX)
 
 Formato de respuesta:
 Responde SOLO con un JSON válido, sin texto adicional:
@@ -465,6 +467,108 @@ Ejemplos de respuesta:
     return response.choices[0].message.content.strip()
 
 
+def try_direct_multi_number_parse(
+    user_message: str,
+    recent_products: List[Dict[str, Any]],
+    cart_items: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Intenta parsear directamente múltiples números del mensaje.
+    Determina si son para agregar o quitar basándose en palabras clave.
+    
+    Ej: "agrega el 1 y el 5" → agregar productos 1 y 5
+    Ej: "quita 2 y 3" → quitar items 2 y 3
+    Ej: "1, 3 y 5" → agregar (default si hay productos recientes)
+    """
+    import re
+    
+    # Extraer todos los números
+    numbers = re.findall(r'\b(\d+)\b', user_message)
+    
+    if len(numbers) < 2:  # Necesitamos al menos 2 para multi-action
+        return None
+    
+    msg_lower = user_message.lower()
+    
+    # Determinar si es agregar o quitar
+    is_add = any(word in msg_lower for word in ["agrega", "añade", "agregar", "añadir", "add", "pon", "ponme"])
+    is_remove = any(word in msg_lower for word in ["quita", "elimina", "remove", "saca", "borra", "quitar"])
+    
+    # Si tiene ambos, no es un caso simple - usar LLM
+    if is_add and is_remove:
+        return None
+    
+    # Default: si hay productos recientes y no dice quitar, es agregar
+    if not is_remove and recent_products:
+        is_add = True
+    elif not is_add and cart_items:
+        is_remove = True
+    
+    if is_add and recent_products:
+        # Agregar múltiples productos
+        items_to_add = []
+        max_position = max(p["position"] for p in recent_products) if recent_products else 0
+        
+        for n in numbers:
+            try:
+                num = int(n)
+                if 1 <= num <= max_position:
+                    items_to_add.append({
+                        "reference": f"producto {num}",
+                        "product_position": num,
+                        "confidence": 0.95
+                    })
+            except ValueError:
+                pass
+        
+        if items_to_add:
+            names = []
+            for item in items_to_add:
+                pos = item["product_position"]
+                prod = next((p for p in recent_products if p["position"] == pos), None)
+                if prod:
+                    names.append(prod["prod_name"])
+            
+            return {
+                "has_multi_action": True,
+                "items_to_add": items_to_add,
+                "items_to_remove": [],
+                "description": f"Agregar: {', '.join(names)}",
+                "needs_confirmation": False,
+            }
+    
+    elif is_remove and cart_items:
+        # Quitar múltiples productos
+        items_to_remove = []
+        
+        for n in numbers:
+            try:
+                num = int(n)
+                if 1 <= num <= len(cart_items):
+                    idx = num - 1
+                    items_to_remove.append({
+                        "reference": f"item {num}",
+                        "cart_item_number": num,
+                        "article_id": str(cart_items[idx]["article_id"]),
+                        "confidence": 0.95
+                    })
+            except ValueError:
+                pass
+        
+        if items_to_remove:
+            names = [cart_items[int(item["cart_item_number"])-1]["prod_name"] for item in items_to_remove]
+            
+            return {
+                "has_multi_action": True,
+                "items_to_add": [],
+                "items_to_remove": items_to_remove,
+                "description": f"Quitar: {', '.join(names)}",
+                "needs_confirmation": False,
+            }
+    
+    return None
+
+
 def parse_multi_action_cart_request(
     user_message: str,
     recent_products: List[Dict[str, Any]],
@@ -486,6 +590,13 @@ def parse_multi_action_cart_request(
         - description: str
         - needs_confirmation: bool
     """
+    # PRIMERO: Intentar parseo directo por números (más rápido y confiable)
+    direct_result = try_direct_multi_number_parse(user_message, recent_products, cart_items)
+    if direct_result:
+        logger.info(f"✅ Multi-acción directa por números: add={len(direct_result['items_to_add'])}, remove={len(direct_result['items_to_remove'])}")
+        return direct_result
+    
+    # SI NO FUNCIONÓ: usar LLM para interpretar
     # Formatear productos recientes
     if recent_products:
         recent_text = "\n".join([
@@ -504,7 +615,7 @@ def parse_multi_action_cart_request(
     else:
         cart_text = "Carrito vacío."
     
-    prompt = f"""Analiza este mensaje para identificar TODAS las acciones de carrito que el usuario quiere hacer.
+    prompt = f"""Analiza este mensaje para identificar TODAS las acciones de carrito.
 
 MENSAJE: "{user_message}"
 
@@ -517,30 +628,25 @@ CARRITO ACTUAL (para QUITAR):
 INSTRUCCIONES:
 1. Identifica CADA producto que el usuario quiere AGREGAR (de productos recientes)
 2. Identifica CADA producto que el usuario quiere QUITAR (del carrito)
-3. El usuario puede mezclar: "agrega X y Y", "quita A pero agrega B", "1, 2 y 5"
-4. Referencias pueden ser:
-   - Por número: "producto 3", "el 1 y el 2", "1, 3, 5"
-   - Por descripción: "la chaqueta azul", "los jeans"
-   - Por posición: "el último", "el primero"
-   - Mixtas: "producto 3 y la camisa blanca"
+3. Referencias pueden ser por número o descripción
+
+IMPORTANTE: 
+- Si dice "agrega X y Y" → ambos van a items_to_add
+- Si dice "quita X y Y" → ambos van a items_to_remove
+- Si mezcla "quita X pero agrega Y" → X a remove, Y a add
 
 Responde SOLO JSON:
 {{
-  "has_multi_action": true/false,
+  "has_multi_action": true,
   "items_to_add": [
-    {{"reference": "descripción del usuario", "product_position": número_en_recientes_o_null, "confidence": 0.0-1.0}}
+    {{"reference": "descripción", "product_position": número_o_null, "confidence": 0.0-1.0}}
   ],
   "items_to_remove": [
-    {{"reference": "descripción del usuario", "cart_item_number": número_en_carrito_o_null, "article_id": "id_o_null", "confidence": 0.0-1.0}}
+    {{"reference": "descripción", "cart_item_number": número_o_null, "article_id": "id_o_null", "confidence": 0.0-1.0}}
   ],
-  "description": "Resumen de acciones",
-  "needs_confirmation": true/false
-}}
-
-EJEMPLOS:
-- "agrega el 1 y el 3" → items_to_add: [{{product_position: 1}}, {{product_position: 3}}]
-- "quita el 2 pero agrega el 4" → items_to_remove: [{{cart_item_number: 2}}], items_to_add: [{{product_position: 4}}]
-- "agrega la chaqueta azul y los pantalones" → items_to_add con referencias por descripción"""
+  "description": "Resumen",
+  "needs_confirmation": false
+}}"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -550,6 +656,7 @@ EJEMPLOS:
     )
     
     content = response.choices[0].message.content.strip()
+    logger.debug(f"LLM multi-action response: {content}")
     
     try:
         data = json.loads(content)
