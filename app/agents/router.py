@@ -79,9 +79,9 @@ REGLAS DE DECISIÓN:
 
 Debes decidir entre CUATRO opciones:
 - "cart": Si el usuario quiere interactuar con su carrito de compras (ver carrito, agregar producto al carrito, quitar del carrito, etc.). Ejemplos: "muéstrame mi carrito", "agrega el producto 1 al carrito", "quiero agregar el suéter blanco", "qué tengo en el carrito"
-- "search": Si el usuario busca productos específicos, recomienda ropa, pregunta por categorías, colores, precios, tallas, etc. Incluso si menciona "verde", "esa prenda", "quiero ver la verde" en el mensaje actual o reciente PERO NO menciona carrito, es "search"
+- "search": Si el usuario busca productos específicos (relacionados a prendas de ropa), recomienda ropa, pregunta por categorías, colores, precios, tallas, etc. Incluso si menciona "verde", "esa prenda", "quiero ver la verde" en el mensaje actual o reciente PERO NO menciona carrito, es "search"
 - "general": Si es un saludo, pregunta general sobre la tienda, agradecimiento, o no requiere búsqueda de productos específicos ni interacción con carrito
-- "disregard": Si el usuario no menciona nada que se relacione con la tienda de ropa, prendas de ropa en general y nuestros servicios,  debes responder con "disregard", ejemplo quien es Cristian Castro, quien es el fundador de la empresa, etc.
+- "disregard": Si el usuario no menciona nada que se relacione con la tienda de ropa o hace consulta sobre productos que no se relacionan con la tienda de ropa, prendas de ropa en general y nuestros servicios,  debes responder con "disregard", ejemplos: quiero un coche honda civic o quien es Cristian Castro, quien es el fundador de la empresa, etc. 
 
 IMPORTANTE: Si el usuario menciona "carrito", "carro", "agregar al carrito", "ver carrito", etc., debe ser "cart". Si solo describe productos o hace preguntas sobre productos SIN mencionar carrito, es "search".
 
@@ -98,7 +98,7 @@ Responde SIEMPRE SOLO con una palabra: "cart", "search" o "general o disregard"
     decision = response.choices[0].message.content.strip().lower()
     
     # Validar que la decisión sea una de las opciones válidas
-    if decision not in ["cart", "search", "general, disregard"]:
+    if decision not in ["cart", "search", "general", "disregard"]:
         # Fallback: si no es válido, intentar inferir
         if "carrito" in user_message.lower() or "carro" in user_message.lower():
             decision = "cart"

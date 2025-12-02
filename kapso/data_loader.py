@@ -49,7 +49,7 @@ def get_context_with_history(
     try:
         conversation_history = get_conversation_history_kapso(user, message_limit, is_testing)
     except Exception as e: 
-        logger.error("❌ Error obteniendo historial de conversación: %s", e)
+        print("❌ Error obteniendo historial de conversación: %s", e)
         conversation_history = []
         
     return Context(
@@ -60,7 +60,7 @@ def get_context_with_history(
 def get_conversation_history_kapso(user: User, message_limit: int, is_testing: bool = False) -> List[ConversationMessage]:
     """Obtiene el historial de conversación usando KapsoClient"""
     if not user.conversation_id:
-        logger.warning("⚠️ No hay conversation_id para el usuario %s", user.name)
+        print("⚠️ No hay conversation_id para el usuario %s", user.name)
         return []
     
     conversation_history = []
@@ -79,7 +79,7 @@ def get_conversation_history_kapso(user: User, message_limit: int, is_testing: b
             messages = response.get("data", [])
             
             if not isinstance(messages, list):
-                logger.error("❌ Formato de mensajes inválido: %s", type(messages))
+                print("❌ Formato de mensajes inválido: %s", type(messages))
                 return []
 
             for i, msg in enumerate(messages):
@@ -112,14 +112,14 @@ def get_conversation_history_kapso(user: User, message_limit: int, is_testing: b
                         ))
                         
                 except Exception as e:
-                    logger.error(f"❌ Error procesando mensaje {i}: {e}")
+                    print(f"❌ Error procesando mensaje {i}: {e}")
                     continue
             
             # Ordenar por timestamp (más antiguos primero)
             conversation_history.sort(key=lambda x: x.timestamp)
             
     except Exception as e:
-        logger.error(f"❌ Error obteniendo historial de Kapso: {e}")
+        print(f"❌ Error obteniendo historial de Kapso: {e}")
         
     return conversation_history
 
