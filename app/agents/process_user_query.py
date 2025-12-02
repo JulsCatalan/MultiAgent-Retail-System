@@ -214,6 +214,7 @@ async def process_user_query(
             cart_result = handle_cart_interaction(
                 conversation_id=user.conversation_id,
                 user_message=user_message,
+                conversation_context=conversation_context,
             )
         else:
             cart_result = {"handled": False, "response": "Necesitas un conversation_id para usar el carrito."}

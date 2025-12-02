@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 
@@ -9,14 +9,41 @@ from ..cart import (
     remove_from_cart,
     get_cart,
     get_recent_products,
+    save_recent_products,
 )
+from .retriever import search_products
+from models import ConversationMessage
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _format_conversation_context_for_cart(
+    conversation_context: Optional[List[ConversationMessage]] = None,
+    max_messages: int = 10,
+) -> str:
+    """
+    Formatea el contexto de conversación reciente para los prompts del cart agent.
+    """
+    if not conversation_context:
+        return ""
+
+    # Tomar los últimos mensajes (más recientes)
+    recent_messages = list(reversed(conversation_context))[:max_messages]
+    lines = []
+    for msg in recent_messages:
+        sender = "Cliente" if msg.sender == "client" else "Asistente"
+        lines.append(f"{sender}: {msg.message}")
+
+    if not lines:
+        return ""
+
+    return "\n".join(lines)
 
 
 def detect_cart_intent_llm(
     user_message: str,
     recent_products: List[Dict[str, Any]],
+    conversation_context: Optional[List[ConversationMessage]] = None,
 ) -> Dict[str, Any]:
     """
     Agente LLM que detecta la intención del usuario respecto al carrito.
@@ -38,6 +65,16 @@ def detect_cart_intent_llm(
     else:
         products_text = "No hay productos recientes asociados a esta conversación."
 
+    # Formatear contexto reciente de conversación
+    context_text = _format_conversation_context_for_cart(conversation_context)
+    context_section = ""
+    if context_text:
+        context_section = f"""
+
+CONVERSACIÓN RECIENTE:
+{context_text}
+"""
+
     prompt = f"""Eres un agente que interpreta la intención del usuario en una tienda de ropa (CedaMoney).
 
 Tu tarea es decidir si el usuario quiere:
@@ -51,6 +88,7 @@ MENSAJE DEL USUARIO:
 
 PRODUCTOS RECIENTES MOSTRADOS AL USUARIO:
 {products_text}
+{context_section}
 
 REGLAS:
 1. Si el usuario solo describe gustos o hace preguntas sobre productos (por ejemplo: "tienes camisas verdes", "qué opinas de esta playera"), pero NO habla explícitamente de carrito o de comprar/agregar/quitar, entonces:
@@ -119,6 +157,7 @@ Responde SOLO con un JSON válido, sin texto adicional, con el siguiente esquema
 def resolve_product_reference(
     user_message: str,
     recent_products: List[Dict[str, Any]],
+    conversation_context: Optional[List[ConversationMessage]] = None,
 ) -> Dict[str, Any]:
     """
     Resuelve referencias a productos por descripción (ej: "el suéter blanco", "esa camisa verde")
@@ -139,7 +178,7 @@ def resolve_product_reference(
             "confidence": 0.0,
             "reason": "No hay productos recientes disponibles",
         }
-    
+
     # Formatear productos con más detalles para mejor matching
     products_text = "\n".join(
         [
@@ -147,7 +186,17 @@ def resolve_product_reference(
             for p in recent_products
         ]
     )
-    
+
+    # Formatear contexto reciente de conversación
+    context_text = _format_conversation_context_for_cart(conversation_context)
+    context_section = ""
+    if context_text:
+        context_section = f"""
+
+CONVERSACIÓN RECIENTE:
+{context_text}
+"""
+
     prompt = f"""Eres un agente experto que resuelve referencias a productos en una conversación de tienda de ropa.
 
 El usuario mencionó algo sobre un producto en este mensaje:
@@ -155,6 +204,7 @@ El usuario mencionó algo sobre un producto en este mensaje:
 
 PRODUCTOS RECIENTES DISPONIBLES:
 {products_text}
+{context_section}
 
 Tu tarea es identificar QUÉ producto específico de la lista el usuario está mencionando basándote en:
 - Descripción del color (ej: "blanco", "verde", "azul")
@@ -323,9 +373,56 @@ Responde SOLO con un JSON válido, sin texto adicional:
         }
 
 
+def extract_catalog_search_query(
+    user_message: str,
+    conversation_context: Optional[List[ConversationMessage]] = None,
+) -> str:
+    """
+    Extrae una query corta para buscar en el catálogo cuando el usuario menciona
+    un producto por nombre (ej: "datguy pants") aunque no esté en recent_products.
+    """
+    context_text = _format_conversation_context_for_cart(conversation_context)
+    context_section = ""
+    if context_text:
+        context_section = f"""
+
+CONVERSACIÓN RECIENTE:
+{context_text}
+"""
+
+    prompt = f"""Eres un asistente que debe extraer una consulta corta para buscar un producto en el catálogo.
+
+MENSAJE ACTUAL DEL USUARIO:
+"{user_message}"
+{context_section}
+
+INSTRUCCIONES:
+- Identifica si el usuario menciona explícitamente un nombre de producto o prenda específica (ej: "datguy pants", "zack tee", "happy hoodie").
+- Si existe un nombre claro de producto, genera una query de búsqueda corta usando ese nombre y, opcionalmente, algún atributo relevante (color, tipo).
+- Si no hay un nombre claro, genera una query corta basada en lo más probable que esté buscando.
+- La respuesta DEBE ser solo la query de búsqueda, SIN texto adicional, SIN comillas.
+
+Ejemplos de respuesta:
+- datguy pants
+- zack tee playera azul
+- happy hoodie sudadera gris
+- suéter blanco abrigado
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=50,
+        temperature=0,
+    )
+
+    return response.choices[0].message.content.strip()
+
+
 def handle_cart_interaction(
     conversation_id: str,
     user_message: str,
+    conversation_context: Optional[List[ConversationMessage]] = None,
 ) -> Dict[str, Any]:
     """
     Maneja la lógica de carrito si aplica.
@@ -336,7 +433,7 @@ def handle_cart_interaction(
     - products: list -> Lista de productos a devolver (opcional, normalmente vacía)
     """
     recent = get_recent_products(conversation_id)
-    intent = detect_cart_intent_llm(user_message, recent)
+    intent = detect_cart_intent_llm(user_message, recent, conversation_context=conversation_context)
     mode = intent["mode"]
 
     if mode == "none":
@@ -503,10 +600,14 @@ def handle_cart_interaction(
         product = None
         resolved_index = index
         
-        # Si no hay índice numérico, intentar resolver por descripción
+        # Si no hay índice numérico, intentar resolver por descripción usando productos recientes
         if not index or index <= 0:
-            reference_result = resolve_product_reference(user_message, recent)
-            
+            reference_result = resolve_product_reference(
+                user_message,
+                recent,
+                conversation_context=conversation_context,
+            )
+
             if reference_result["resolved"]:
                 resolved_index = reference_result["product_index"]
                 confidence = reference_result["confidence"]
@@ -514,25 +615,65 @@ def handle_cart_interaction(
                 if confidence < 0.7:
                     needs_confirmation = True
             else:
-                # No se pudo resolver la referencia
-                max_idx = max(p["position"] for p in recent) if recent else 0
-                # Construir lista de productos disponibles
-                products_list = []
-                for p in recent[:5]:
-                    products_list.append(
-                        f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
-                    )
-                products_text = ", ".join(products_list)
-                
+                # No se pudo resolver la referencia en la lista reciente:
+                # intentar buscar directamente en el catálogo usando el contexto.
+                search_query = extract_catalog_search_query(
+                    user_message, conversation_context=conversation_context
+                )
+
+                if not search_query:
+                    max_idx = max(p["position"] for p in recent) if recent else 0
+                    products_list = []
+                    for p in recent[:5]:
+                        products_list.append(
+                            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
+                        )
+                    products_text = ", ".join(products_list)
+
+                    return {
+                        "handled": True,
+                        "response": (
+                            "No pude identificar exactamente qué producto quieres agregar. "
+                            f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
+                            "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
+                            f"Productos disponibles: {products_text}"
+                        ),
+                        "products": [],
+                    }
+
+                # Buscar en el catálogo: esto SOLO devuelve productos que realmente existen
+                catalog_products = search_products(search_query)
+
+                if not catalog_products:
+                    return {
+                        "handled": True,
+                        "response": (
+                            "He buscado en nuestro catálogo y no encontré un producto que coincida "
+                            "claramente con lo que mencionas. "
+                            "Puede que ese modelo específico no exista en nuestra tienda. "
+                            "Si quieres, puedo sugerirte alternativas similares."
+                        ),
+                        "products": [],
+                    }
+
+                # Guardar estos productos como recientes para futuras referencias (Producto 1, etc.)
+                save_recent_products(conversation_id, catalog_products)
+
+                # Mostrar al usuario la mejor coincidencia y pedir confirmación explícita
+                best = catalog_products[0]
+                response = (
+                    "No encontré ese producto exacto entre los últimos que vimos, "
+                    "pero en el catálogo encontré esta opción que parece coincidir con lo que dices:\n\n"
+                    f"Producto 1: {best['prod_name']} ({best['colour_group_name']}) - "
+                    f"{best['product_group_name']} - ${best['price_mxn']:.2f} MXN.\n\n"
+                    "Si quieres que lo agregue al carrito, puedes decirme por ejemplo "
+                    "\"agrega el producto 1 al carrito\" o \"sí, agrega ese producto\"."
+                )
+
                 return {
                     "handled": True,
-                    "response": (
-                        f"No pude identificar exactamente qué producto quieres agregar. "
-                        f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
-                        "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
-                        f"Productos disponibles: {products_text}"
-                    ),
-                    "products": [],
+                    "response": response,
+                    "products": catalog_products,
                 }
         
         # Buscar producto por posición resuelta
