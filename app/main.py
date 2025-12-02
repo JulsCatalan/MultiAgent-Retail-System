@@ -707,6 +707,8 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
     Se llama automáticamente cuando Stripe redirige después del pago exitoso.
     URL: /checkout/success?session_id=cs_test_xxx
     """
+    session_ = await stripe.checkout.sessions.retrieve(session_id);
+    print(session_)
     start_time = time.time()
     
     logger.info(f"🎉 [SUCCESS] Procesando pago exitoso - SessionID: {session_id}")
@@ -784,6 +786,14 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
                 shipping_address = f"{address.line1}, {address.city}, {address.state} {address.postal_code}, {address.country}"
         
         # 6. Crear orden en la BD
+        # Extraer payment_intent ID (puede ser un objeto PaymentIntent o un string)
+        payment_intent_id = None
+        if hasattr(session, 'payment_intent'):
+            payment_intent = session.payment_intent
+            if payment_intent:
+                # Si es un objeto PaymentIntent, obtener su ID, si es string usar directamente
+                payment_intent_id = payment_intent.id if hasattr(payment_intent, 'id') else str(payment_intent)
+        
         cur.execute("""
             INSERT INTO orders (
                 conversation_id,
@@ -801,7 +811,7 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
             user_name,
             phone_number,
             session_id,
-            session.payment_intent if hasattr(session, 'payment_intent') else None,
+            payment_intent_id,
             total_amount,
             'MXN',
             'completed',
