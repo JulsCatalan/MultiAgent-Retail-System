@@ -140,7 +140,7 @@ async def handle_response(data_list: list) -> dict:
             metadata=UserMetadata(whatsapp_config_id=whatsapp_config_id, reached_from_phone_number=reached_from_phone_number)
         )
     
-    # --- FLUJO DE AGENTE CON CART INTEGRATION ---
+    # --- FLUJO DE AGENTE CON CART INTEGRATION Y SOPORTE DE IMÁGENES ---
     try:
         from app.agents.cart_agent import handle_cart_interaction
         from app.cart import save_recent_products
@@ -149,7 +149,7 @@ async def handle_response(data_list: list) -> dict:
         loop = asyncio.get_event_loop()
         
         def _handle_cart_and_agent():
-            """Maneja cart agent y agente normal, luego envía respuesta"""
+            """Maneja cart agent y agente normal, luego envía respuesta con imágenes"""
             with KapsoClient() as kapso:
                 # PASO 1: Verificar si es interacción de carrito
                 cart_result = handle_cart_interaction(
@@ -160,14 +160,84 @@ async def handle_response(data_list: list) -> dict:
                 )
                 
                 if cart_result.get("handled"):
-                    # Cart agent manejó la solicitud (add, remove, show, checkout, etc.)
-                    response_text = cart_result["response"]
                     logger.info("🛒 Cart agent manejó la solicitud")
-                    kapso.send_message(whatsapp_conversation_id, response_text)
+                    
+                    # Check if we need to send images
+                    if cart_result.get("send_images"):
+                        image_type = cart_result.get("image_type", "")
+                        cart_items = cart_result.get("cart_items", [])
+                        cart_total = cart_result.get("cart_total", 0.0)
+                        
+                        if image_type == "cart":
+                            # Show cart with images
+                            logger.info(f"📷 Enviando carrito con {len(cart_items)} imágenes")
+                            kapso.send_cart_with_images(
+                                whatsapp_conversation_id,
+                                cart_items,
+                                cart_total,
+                                header_message=cart_result.get("response")
+                            )
+                        
+                        elif image_type == "checkout":
+                            # Show checkout summary with images
+                            checkout_url = cart_result.get("checkout_url", "")
+                            logger.info(f"📷 Enviando checkout con {len(cart_items)} imágenes")
+                            kapso.send_checkout_with_images(
+                                whatsapp_conversation_id,
+                                cart_items,
+                                cart_total,
+                                checkout_url
+                            )
+                        
+                        elif image_type == "added_to_cart":
+                            # Show added product with image
+                            added_product = cart_result.get("added_product", {})
+                            logger.info(f"📷 Mostrando producto agregado con imagen")
+                            kapso.send_message(whatsapp_conversation_id, cart_result.get("response", ""))
+                            
+                            if added_product:
+                                # Build caption for added product
+                                name = added_product.get("prod_name", "Producto")
+                                color = added_product.get("colour_group_name", "")
+                                price = added_product.get("price_mxn", 0)
+                                image_url = added_product.get("image_url", "")
+                                
+                                caption = (
+                                    f"*{name}* ({color})\n"
+                                    f"💰 Precio: ${price:.2f} MXN\n\n"
+                                    f"¿Qué deseas hacer?\n"
+                                    f"• \"Ver carrito\" - Ver todos tus productos\n"
+                                    f"• \"Seguir comprando\" - Buscar más\n"
+                                    f"• \"Proceder al pago\" - Finalizar"
+                                )
+                                
+                                if image_url and image_url.startswith("http"):
+                                    kapso.send_image_message(whatsapp_conversation_id, image_url, caption)
+                                else:
+                                    kapso.send_message(whatsapp_conversation_id, caption)
+                        
+                        elif image_type == "search":
+                            # Show search results with images
+                            search_products = cart_result.get("search_products", [])
+                            logger.info(f"📷 Enviando {len(search_products)} productos de búsqueda con imágenes")
+                            kapso.send_products_with_images(
+                                whatsapp_conversation_id,
+                                search_products,
+                                intro_message=cart_result.get("response"),
+                                max_images=5
+                            )
+                            # Save as recent products
+                            save_recent_products(whatsapp_conversation_id, search_products)
+                    else:
+                        # Just send text response
+                        response_text = cart_result["response"]
+                        kapso.send_message(whatsapp_conversation_id, response_text)
                     
                     return {
                         "cart_handled": True, 
-                        "response": response_text
+                        "response": cart_result.get("response", ""),
+                        "image_type": cart_result.get("image_type"),
+                        "items_count": len(cart_result.get("cart_items", []))
                     }
                 
                 # PASO 2: Agente normal (Router → Retriever → Generator)
@@ -184,20 +254,33 @@ async def handle_response(data_list: list) -> dict:
                     
                     agent_loop.close()
                     
-                    # Enviar respuesta
+                    # Get products and agent response
                     agent_response = result.get("response", "")
-                    kapso.send_message(whatsapp_conversation_id, agent_response)
-                    
-                    # Guardar productos como recientes para cart
                     products = result.get("products", [])
-                    if products:
+                    
+                    # Decide how to send response based on products
+                    if products and len(products) > 0:
+                        # Send products WITH IMAGES
+                        logger.info(f"📷 Enviando {min(len(products), 5)} productos con imágenes")
+                        kapso.send_products_with_images(
+                            whatsapp_conversation_id,
+                            products,
+                            intro_message=agent_response,
+                            max_images=5  # WhatsApp best practice
+                        )
+                        
+                        # Save products as recent for cart operations
                         logger.info(f"📦 Guardando {len(products)} productos recientes")
                         save_recent_products(whatsapp_conversation_id, products)
+                    else:
+                        # No products - just send text response
+                        kapso.send_message(whatsapp_conversation_id, agent_response)
                     
                     return {
                         "cart_handled": False,
                         "response": agent_response,
                         "products_count": len(products),
+                        "products_with_images": min(len(products), 5) if products else 0,
                         "routing_decision": result.get("routing_decision")
                     }
                     

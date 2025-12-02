@@ -563,16 +563,13 @@ def format_cart_summary(cart_items: List[Dict], total: float) -> str:
     
     items_text = []
     for i, item in enumerate(cart_items, 1):
-        # Usar las claves correctas que vienen de get_cart()
-        price = float(item.get('price_mxn', 0))
-        quantity = int(item.get('quantity', 1))
-        name = item.get('prod_name', 'Producto sin nombre')
-        color = item.get('colour_group_name', 'N/A')
-        
-        subtotal = price * quantity
+        price = item.get('price') or item.get('price_mxn', 0)
+        subtotal = price * item['quantity']
+        name = item.get('name') or item.get('prod_name', 'Producto')
+        color = item.get('color') or item.get('colour_group_name', 'N/A')
         items_text.append(
             f"{i}. *{name}* ({color})\n"
-            f"   Cantidad: {quantity} | Subtotal: ${subtotal:.2f} MXN"
+            f"   Cantidad: {item['quantity']} | Subtotal: ${subtotal:.2f} MXN"
         )
     
     items_section = "\n\n".join(items_text)
@@ -592,3 +589,62 @@ def format_cart_summary(cart_items: List[Dict], total: float) -> str:
 • "Vaciar carrito" - Para empezar de nuevo"""
     
     return message
+
+
+def get_cart_items_for_display(conversation_id: str) -> List[Dict[str, Any]]:
+    """
+    Obtiene los items del carrito con información completa para mostrar.
+    Normaliza los campos para uso consistente.
+    
+    Returns:
+        Lista de dicts con: name, price, color, quantity, image_url, article_id, type, subtotal
+    """
+    cart_items = get_cart(conversation_id)
+    
+    display_items = []
+    for item in cart_items:
+        price = item.get('price_mxn', 0)
+        quantity = item.get('quantity', 1)
+        
+        display_items.append({
+            "article_id": item.get("article_id"),
+            "name": item.get("prod_name", "Producto"),
+            "price": price,
+            "price_mxn": price,
+            "color": item.get("colour_group_name", ""),
+            "colour_group_name": item.get("colour_group_name", ""),
+            "type": item.get("product_type_name", ""),
+            "product_type_name": item.get("product_type_name", ""),
+            "category": item.get("product_group_name", ""),
+            "product_group_name": item.get("product_group_name", ""),
+            "quantity": quantity,
+            "image_url": item.get("image_url", ""),
+            "subtotal": price * quantity
+        })
+    
+    return display_items
+
+
+def format_checkout_message_simple(total: float, checkout_url: str) -> str:
+    """
+    Formatea un mensaje simple de checkout sin items (los items se envían como imágenes).
+    
+    Args:
+        total: Total a pagar
+        checkout_url: URL del checkout de Stripe
+        
+    Returns:
+        Mensaje formateado para WhatsApp
+    """
+    return (
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 *TOTAL A PAGAR: ${total:.2f} MXN*\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"👉 *HAZ CLIC AQUÍ PARA PAGAR:*\n"
+        f"{checkout_url}\n\n"
+        f"✅ Pago 100% seguro con Stripe\n"
+        f"🚚 Envío a toda la República Mexicana\n"
+        f"📦 Recibirás confirmación de tu orden\n"
+        f"⏰ Este link es válido por 24 horas\n\n"
+        f"_Si deseas modificar tu carrito, dime \"seguir comprando\" o \"modificar carrito\"._"
+    )

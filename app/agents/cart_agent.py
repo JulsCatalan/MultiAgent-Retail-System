@@ -15,9 +15,11 @@ from ..cart import (
     create_stripe_checkout_for_whatsapp,
     format_checkout_message,
     format_cart_summary,
+    format_checkout_message_simple,
     calculate_cart_total,
     get_cart_by_conversation,
-    clear_cart_by_id,
+    get_cart_items_for_display,
+    clear_cart as clear_cart_func,
     save_recent_products,
 )
 from .retriever import search_products
@@ -200,7 +202,7 @@ def resolve_product_reference(
             "confidence": 0.0,
             "reason": "No hay productos recientes disponibles",
         }
-
+    
     # Formatear productos con más detalles para mejor matching
     products_text = "\n".join(
         [
@@ -218,7 +220,7 @@ def resolve_product_reference(
 CONVERSACIÓN RECIENTE:
 {context_text}
 """
-
+    
     prompt = f"""Eres un agente experto que resuelve referencias a productos en una conversación de tienda de ropa.
 
 El usuario mencionó algo sobre un producto en este mensaje:
@@ -487,15 +489,28 @@ def handle_cart_interaction(
                 "• \"Agrega el producto 1\"\n"
                 "• \"Quiero el suéter azul\""
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
 
         # Calcular total
         cart_id = get_cart_by_conversation(conversation_id)
         total = calculate_cart_total(cart_id) if cart_id else 0.0
         
-        # Usar el formateador mejorado
-        response = format_cart_summary(cart_items, total)
-        return {"handled": True, "response": response, "products": []}
+        # Get cart items with normalized fields for image display
+        display_items = get_cart_items_for_display(conversation_id)
+        
+        # Header message (images will be sent separately)
+        response = "🛒 *TU CARRITO ACTUAL*\n\nEstos son los productos en tu carrito:"
+        
+        # Return cart items for image display
+        return {
+            "handled": True, 
+            "response": response, 
+            "products": [],
+            "send_images": True,
+            "image_type": "cart",
+            "cart_items": display_items,
+            "cart_total": total
+        }
     
     # Proceder al pago / Checkout
     if mode == "checkout":
@@ -511,7 +526,7 @@ def handle_cart_interaction(
                 "Primero busca y agrega algunos productos que te gusten, "
                 "luego podrás proceder al pago."
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
 
         # Validar que tengamos nombre y teléfono del usuario
         if not user_name or not phone_number:
@@ -523,7 +538,7 @@ def handle_cart_interaction(
                 "• Tu número de teléfono\n\n"
                 "Luego intenta de nuevo."
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
 
         # Crear sesión de checkout de Stripe
         logger.info(f"💳 Creando sesión Stripe para {user_name} ({phone_number})")
@@ -542,7 +557,7 @@ def handle_cart_interaction(
                 f"Error: {error_msg}\n\n"
                 f"Por favor intenta de nuevo en unos momentos o contacta a soporte."
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
 
         # Éxito - formatear mensaje con link de pago
         logger.info(
@@ -552,30 +567,64 @@ def handle_cart_interaction(
             f"Items: {checkout_result['items_count']}"
         )
         
-        response = format_checkout_message(
-            cart_items=checkout_result["cart_items"],
-            total=checkout_result["total_amount"],
-            checkout_url=checkout_result["checkout_url"]
-        )
+        # Get cart items for image display
+        display_items = get_cart_items_for_display(conversation_id)
         
-        return {"handled": True, "response": response, "products": []}
+        # Header for checkout with images
+        response = "🛒 *RESUMEN DE TU ORDEN*\n\nEstos son los productos que vas a comprar:"
+        
+        # NOTE: Cart is NOT cleared here - it stays until payment is confirmed
+        # This allows the user to go back and modify the cart
+        
+        return {
+            "handled": True, 
+            "response": response, 
+            "products": [],
+            "send_images": True,
+            "image_type": "checkout",
+            "cart_items": display_items,
+            "cart_total": checkout_result["total_amount"],
+            "checkout_url": checkout_result["checkout_url"]
+        }
     
     # Seguir comprando / Modificar carrito (después de checkout)
     if mode == "continue_shopping":
         logger.info(f"🛍️ Usuario decidió seguir comprando - ConvID: {conversation_id}")
         
-        response = (
-            "¡Perfecto! Puedes seguir explorando productos. 🛍️\n\n"
-            "Dime qué estás buscando y te ayudo a encontrarlo:\n"
-            "• \"Busco vestidos rojos\"\n"
-            "• \"Muéstrame jeans\"\n"
-            "• \"¿Tienes camisetas?\"\n\n"
-            "También puedes:\n"
-            "• Ver tu carrito: \"Ver carrito\"\n"
-            "• Modificar items: \"Quita el producto 1\"\n"
-            "• Proceder al pago cuando estés listo"
-        )
-        return {"handled": True, "response": response, "products": []}
+        # IMPORTANT: Cart is NOT cleared here - the user can continue shopping
+        # and add more items, then checkout again with the updated cart
+        
+        # Check if user has items in cart to remind them
+        cart_items = get_cart(conversation_id)
+        cart_count = len(cart_items) if cart_items else 0
+        
+        if cart_count > 0:
+            cart_id = get_cart_by_conversation(conversation_id)
+            total = calculate_cart_total(cart_id) if cart_id else 0.0
+            
+            response = (
+                f"¡Perfecto! Tu carrito con {cart_count} producto(s) sigue guardado. 🛒\n"
+                f"💰 Total actual: ${total:.2f} MXN\n\n"
+                "Puedes seguir explorando:\n"
+                "• \"Busco vestidos rojos\"\n"
+                "• \"Muéstrame jeans\"\n"
+                "• \"¿Tienes camisetas?\"\n\n"
+                "O gestionar tu carrito:\n"
+                "• \"Ver carrito\" - Ver productos guardados\n"
+                "• \"Quita el producto 1\" - Modificar items\n"
+                "• \"Proceder al pago\" - Cuando estés listo"
+            )
+        else:
+            response = (
+                "¡Perfecto! Puedes seguir explorando productos. 🛍️\n\n"
+                "Dime qué estás buscando:\n"
+                "• \"Busco vestidos rojos\"\n"
+                "• \"Muéstrame jeans\"\n"
+                "• \"¿Tienes camisetas?\"\n\n"
+                "Cuando encuentres algo que te guste, dime \"agrega el producto 1\""
+            )
+        
+        return {"handled": True, "response": response, "products": [], "send_images": False}
     
     # Vaciar carrito completamente
     if mode == "clear_cart":
@@ -586,14 +635,14 @@ def handle_cart_interaction(
         if not cart_id:
             logger.debug("Carrito ya vacío (no existe cart_id)")
             response = "Tu carrito ya está vacío. 🛒"
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
         
         cart_items = get_cart(conversation_id)
         
         if not cart_items:
             logger.debug("Carrito ya vacío (sin items)")
             response = "Tu carrito ya está vacío. 🛒"
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
         
         # Confirmación antes de vaciar (si la confianza es baja)
         confidence = intent.get("confidence", 0.0)
@@ -605,7 +654,7 @@ def handle_cart_interaction(
                 f"Tienes {items_count} producto(s) en el carrito.\n\n"
                 f"Responde \"sí, vaciar carrito\" para confirmar."
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
         
         # Vaciar el carrito
         items_count = len(cart_items)
@@ -616,7 +665,7 @@ def handle_cart_interaction(
             "✅ Tu carrito ha sido vaciado completamente.\n\n"
             "¿Qué te gustaría buscar ahora?"
         )
-        return {"handled": True, "response": response, "products": []}
+        return {"handled": True, "response": response, "products": [], "send_images": False}
 
     # Quitar del carrito
     if mode == "remove_from_cart":
@@ -629,6 +678,7 @@ def handle_cart_interaction(
                 "handled": True,
                 "response": "Tu carrito está vacío, no hay nada que quitar. 🛒",
                 "products": [],
+                "send_images": False,
             }
         
         index = intent.get("product_index")
@@ -668,6 +718,7 @@ def handle_cart_interaction(
                         f"Productos en tu carrito: {cart_text}"
                     ),
                     "products": [],
+                    "send_images": False,
                 }
         else:
             # Buscar producto por posición en el carrito
@@ -683,6 +734,7 @@ def handle_cart_interaction(
                         "Puedes decirme, por ejemplo, \"quita el producto 1\"."
                     ),
                     "products": [],
+                    "send_images": False,
                 }
         
         # Si no se encontró el producto, intentar resolver
@@ -706,6 +758,7 @@ def handle_cart_interaction(
                     "Puedes decirme, por ejemplo, \"quita el producto 1\" o \"elimina la camisa verde\"."
                 ),
                 "products": [],
+                "send_images": False,
             }
         
         # Si necesita confirmación o la confianza es baja, NO modificamos el carrito
@@ -720,7 +773,7 @@ def handle_cart_interaction(
                 "Puedes decirme \"sí, quita el producto "
                 f"{resolved_index}\" o simplemente \"sí\"."
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
         
         # Confianza alta: procedemos a quitar del carrito
         remove_from_cart(conversation_id, article_id)
@@ -744,7 +797,7 @@ def handle_cart_interaction(
             f"• \"Seguir comprando\" - Buscar más productos\n"
             f"• \"Proceder al pago\" - Si estás listo"
         )
-        return {"handled": True, "response": response, "products": []}
+        return {"handled": True, "response": response, "products": [], "send_images": False}
 
     # Agregar al carrito usando posición de producto reciente
     if mode == "add_to_cart":
@@ -765,6 +818,7 @@ def handle_cart_interaction(
                     "• \"Quiero el suéter blanco\""
                 ),
                 "products": [],
+                "send_images": False,
             }
 
         product = None
@@ -777,7 +831,7 @@ def handle_cart_interaction(
                 recent,
                 conversation_context=conversation_context,
             )
-
+            
             if reference_result["resolved"]:
                 resolved_index = reference_result["product_index"]
                 confidence = reference_result["confidence"]
@@ -792,23 +846,24 @@ def handle_cart_interaction(
                 )
 
                 if not search_query:
-                    max_idx = max(p["position"] for p in recent) if recent else 0
-                    products_list = []
-                    for p in recent[:5]:
-                        products_list.append(
-                            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
-                        )
-                    products_text = ", ".join(products_list)
-
-                    return {
-                        "handled": True,
-                        "response": (
+                max_idx = max(p["position"] for p in recent) if recent else 0
+                products_list = []
+                for p in recent[:5]:
+                    products_list.append(
+                        f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
+                    )
+                products_text = ", ".join(products_list)
+                
+                return {
+                    "handled": True,
+                    "response": (
                             "No pude identificar exactamente qué producto quieres agregar. "
-                            f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
-                            "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
-                            f"Productos disponibles: {products_text}"
-                        ),
-                        "products": [],
+                        f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
+                        "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
+                        f"Productos disponibles: {products_text}"
+                    ),
+                    "products": [],
+                        "send_images": False,
                     }
 
                 # Buscar en el catálogo: esto SOLO devuelve productos que realmente existen
@@ -824,6 +879,7 @@ def handle_cart_interaction(
                             "Si quieres, puedo sugerirte alternativas similares."
                         ),
                         "products": [],
+                        "send_images": False,
                     }
 
                 # Guardar estos productos como recientes para futuras referencias (Producto 1, etc.)
@@ -840,10 +896,14 @@ def handle_cart_interaction(
                     "\"agrega el producto 1 al carrito\" o \"sí, agrega ese producto\"."
                 )
 
+                # Send the found product with image
                 return {
                     "handled": True,
                     "response": response,
                     "products": catalog_products,
+                    "send_images": True,
+                    "image_type": "search",
+                    "search_products": catalog_products,
                 }
         
         # Buscar producto por posición resuelta (esto se ejecuta si index existe o si se resolvió la referencia)
@@ -860,6 +920,7 @@ def handle_cart_interaction(
                     "de la última lista que te mostré."
                 ),
                 "products": [],
+                "send_images": False,
             }
 
         # Si el modelo indica que necesita confirmación o la confianza es baja, NO modificamos el carrito
@@ -871,7 +932,7 @@ def handle_cart_interaction(
                 "Puedes decirme \"sí, agrega el producto "
                 f"{resolved_index} al carrito\" o simplemente \"sí\"."
             )
-            return {"handled": True, "response": response, "products": []}
+            return {"handled": True, "response": response, "products": [], "send_images": False}
 
         # Confianza alta: procedemos a agregar al carrito
         add_to_cart(conversation_id, product["article_id"], quantity=1)
@@ -883,15 +944,25 @@ def handle_cart_interaction(
             f"ConvID: {conversation_id}"
         )
         
-        response = (
-            f"✅ He agregado al carrito:\n\n"
-            f"*{product['prod_name']}* ({product['colour_group_name']})\n"
-            f"Precio: ${product['price_mxn']:.2f} MXN\n\n"
-            f"¿Qué deseas hacer ahora?\n"
-            f"• \"Ver carrito\" - Ver todos tus productos\n"
-            f"• \"Seguir comprando\" - Buscar más productos\n"
-            f"• \"Proceder al pago\" - Finalizar compra"
-        )
-        return {"handled": True, "response": response, "products": []}
+        # Show the added product with image
+        response = f"✅ He agregado al carrito:"
+        
+        added_product = {
+            "prod_name": product['prod_name'],
+            "colour_group_name": product['colour_group_name'],
+            "price_mxn": product['price_mxn'],
+            "image_url": product.get('image_url', ''),
+            "product_type_name": product.get('product_type_name', ''),
+            "product_group_name": product.get('product_group_name', ''),
+        }
+        
+        return {
+            "handled": True, 
+            "response": response, 
+            "products": [],
+            "send_images": True,
+            "image_type": "added_to_cart",
+            "added_product": added_product,
+        }
 
     return {"handled": False}

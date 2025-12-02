@@ -212,16 +212,320 @@ class KapsoClient:
         
         response = self._client.post(url, json=body)
         
-        
         # Log response for debugging
         try:
             response_json = response.json()
-            print("DEBUG: Send message response: %s", response_json)
+            logger.debug(f"Send message response: {response_json}")
         except Exception as e:
-            print("DEBUG: Could not parse response JSON: %s", e)
+            logger.debug(f"Could not parse response JSON: {e}")
         
         response.raise_for_status()
         return response_json
+
+    def send_image_message(
+        self, 
+        conversation_id: str, 
+        image_url: str, 
+        caption: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Send an image message to a specific conversation.
+        
+        Args:
+            conversation_id: ID of the conversation
+            image_url: Public URL of the image to send
+            caption: Optional caption/description for the image
+            
+        Returns:
+            Dict with the response from Kapso API
+        """
+        url = f"/whatsapp_conversations/{conversation_id}/whatsapp_messages"
+        body = {
+            "message": {
+                "message_type": "image",
+                "media_url": image_url,
+            }
+        }
+        
+        if caption:
+            body["message"]["caption"] = caption
+            body["message"]["content"] = caption
+        
+        logger.debug(f"📷 Sending image to {conversation_id}: {image_url[:50] if image_url else 'no-url'}...")
+        
+        try:
+            response = self._client.post(url, json=body)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ Error sending image: {e}")
+            raise
+
+    def send_product_with_image(
+        self,
+        conversation_id: str,
+        product: Dict[str, Any],
+        position: int = 1
+    ) -> Dict[str, Any]:
+        """Send a product card with image and details.
+        
+        Args:
+            conversation_id: ID of the conversation
+            product: Product dict with name, price, color, image_url, etc.
+            position: Product position number (1, 2, 3...)
+            
+        Returns:
+            Dict with the response from Kapso API
+        """
+        # Build caption with product details
+        name = product.get("prod_name") or product.get("name", "Producto")
+        price = product.get("price_mxn") or product.get("price", 0)
+        color = product.get("colour_group_name") or product.get("color", "")
+        category = product.get("product_group_name") or product.get("category", "")
+        product_type = product.get("product_type_name") or product.get("type", "")
+        image_url = product.get("image_url", "")
+        
+        # Build formatted caption
+        caption = f"*Producto {position}:* {name}\n"
+        if color:
+            caption += f"🎨 Color: {color}\n"
+        if product_type:
+            caption += f"👕 Tipo: {product_type}\n"
+        if category:
+            caption += f"📦 Categoría: {category}\n"
+        caption += f"💰 *Precio: ${price:.2f} MXN*\n"
+        caption += f"\n_Responde \"Agrega el producto {position}\" para añadirlo al carrito_"
+        
+        # If no valid image URL, fall back to text-only
+        if not image_url or not image_url.startswith("http"):
+            logger.warning(f"⚠️ Product {position} has no valid image URL, sending text only")
+            return self.send_message(conversation_id, caption)
+        
+        return self.send_image_message(conversation_id, image_url, caption)
+
+    def send_cart_item_with_image(
+        self,
+        conversation_id: str,
+        item: Dict[str, Any],
+        position: int = 1
+    ) -> Dict[str, Any]:
+        """Send a cart item with image and details.
+        
+        Args:
+            conversation_id: ID of the conversation
+            item: Cart item dict with name, price, color, image_url, quantity, etc.
+            position: Item position in cart (1, 2, 3...)
+            
+        Returns:
+            Dict with the response from Kapso API
+        """
+        name = item.get("prod_name") or item.get("name", "Producto")
+        price = item.get("price_mxn") or item.get("price", 0)
+        color = item.get("colour_group_name") or item.get("color", "")
+        quantity = item.get("quantity", 1)
+        image_url = item.get("image_url", "")
+        subtotal = price * quantity
+        
+        # Build formatted caption for cart item
+        caption = f"*{position}. {name}*\n"
+        if color:
+            caption += f"🎨 Color: {color}\n"
+        caption += f"📦 Cantidad: {quantity}\n"
+        caption += f"💰 Subtotal: *${subtotal:.2f} MXN*"
+        
+        # If no valid image URL, fall back to text-only
+        if not image_url or not image_url.startswith("http"):
+            logger.warning(f"⚠️ Cart item {position} has no valid image URL, sending text only")
+            return self.send_message(conversation_id, caption)
+        
+        return self.send_image_message(conversation_id, image_url, caption)
+
+    def send_products_with_images(
+        self,
+        conversation_id: str,
+        products: List[Dict[str, Any]],
+        intro_message: Optional[str] = None,
+        max_images: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Send multiple products with images.
+        
+        Args:
+            conversation_id: ID of the conversation
+            products: List of product dicts
+            intro_message: Optional intro text before products
+            max_images: Max number of product images to send (WhatsApp best practice)
+            
+        Returns:
+            List of responses from each message sent
+        """
+        responses = []
+        
+        # Send intro message first if provided
+        if intro_message:
+            try:
+                resp = self.send_message(conversation_id, intro_message)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending intro message: {e}")
+        
+        # Send product images (limit to avoid spam)
+        for i, product in enumerate(products[:max_images], start=1):
+            try:
+                resp = self.send_product_with_image(conversation_id, product, position=i)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending product {i}: {e}")
+                # Fall back to text if image fails
+                name = product.get("prod_name") or product.get("name", "N/A")
+                price = product.get("price_mxn") or product.get("price", 0)
+                fallback_text = f"Producto {i}: {name} - ${price:.2f} MXN"
+                try:
+                    resp = self.send_message(conversation_id, fallback_text)
+                    responses.append(resp)
+                except Exception as e2:
+                    logger.error(f"Error sending fallback text for product {i}: {e2}")
+        
+        # If more products available, send a note
+        if len(products) > max_images:
+            remaining = len(products) - max_images
+            note = f"_...y {remaining} producto(s) más. Pídeme ver más opciones si te interesa._"
+            try:
+                resp = self.send_message(conversation_id, note)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending 'more products' note: {e}")
+        
+        return responses
+
+    def send_cart_with_images(
+        self,
+        conversation_id: str,
+        cart_items: List[Dict[str, Any]],
+        total: float,
+        header_message: Optional[str] = None,
+        footer_message: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Send cart contents with images for each item.
+        
+        Args:
+            conversation_id: ID of the conversation
+            cart_items: List of cart item dicts
+            total: Cart total
+            header_message: Optional header text before items
+            footer_message: Optional footer text after items (e.g., total + actions)
+            
+        Returns:
+            List of responses from each message sent
+        """
+        responses = []
+        
+        # Send header if provided
+        if header_message:
+            try:
+                resp = self.send_message(conversation_id, header_message)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending cart header: {e}")
+        
+        # Send each cart item with image
+        for i, item in enumerate(cart_items, start=1):
+            try:
+                resp = self.send_cart_item_with_image(conversation_id, item, position=i)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending cart item {i}: {e}")
+                # Fallback to text
+                name = item.get("prod_name") or item.get("name", "N/A")
+                price = item.get("price_mxn") or item.get("price", 0)
+                qty = item.get("quantity", 1)
+                fallback = f"{i}. {name} x{qty} - ${price * qty:.2f} MXN"
+                try:
+                    resp = self.send_message(conversation_id, fallback)
+                    responses.append(resp)
+                except Exception as e2:
+                    logger.error(f"Error sending fallback for cart item {i}: {e2}")
+        
+        # Send footer with total and actions
+        if footer_message:
+            try:
+                resp = self.send_message(conversation_id, footer_message)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending cart footer: {e}")
+        else:
+            # Default footer with total
+            default_footer = (
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💰 *TOTAL: ${total:.2f} MXN*\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"¿Qué deseas hacer?\n"
+                f"• \"Proceder al pago\" - Finalizar compra\n"
+                f"• \"Quitar producto X\" - Eliminar un item\n"
+                f"• \"Seguir comprando\" - Buscar más productos"
+            )
+            try:
+                resp = self.send_message(conversation_id, default_footer)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending default cart footer: {e}")
+        
+        return responses
+
+    def send_checkout_with_images(
+        self,
+        conversation_id: str,
+        cart_items: List[Dict[str, Any]],
+        total: float,
+        checkout_url: str
+    ) -> List[Dict[str, Any]]:
+        """Send checkout summary with images for each item and payment link.
+        
+        Args:
+            conversation_id: ID of the conversation
+            cart_items: List of cart item dicts
+            total: Cart total
+            checkout_url: Stripe checkout URL
+            
+        Returns:
+            List of responses from each message sent
+        """
+        responses = []
+        
+        # Header
+        header = "🛒 *RESUMEN DE TU ORDEN*\n\nEstos son los productos que vas a comprar:"
+        try:
+            resp = self.send_message(conversation_id, header)
+            responses.append(resp)
+        except Exception as e:
+            logger.error(f"Error sending checkout header: {e}")
+        
+        # Send each item with image
+        for i, item in enumerate(cart_items, start=1):
+            try:
+                resp = self.send_cart_item_with_image(conversation_id, item, position=i)
+                responses.append(resp)
+            except Exception as e:
+                logger.error(f"Error sending checkout item {i}: {e}")
+        
+        # Footer with total and payment link
+        footer = (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💰 *TOTAL A PAGAR: ${total:.2f} MXN*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"👉 *HAZ CLIC AQUÍ PARA PAGAR:*\n"
+            f"{checkout_url}\n\n"
+            f"✅ Pago 100% seguro con Stripe\n"
+            f"🚚 Envío a toda la República Mexicana\n"
+            f"📦 Recibirás confirmación de tu orden\n"
+            f"⏰ Este link es válido por 24 horas\n\n"
+            f"_Si deseas modificar tu carrito, dime \"seguir comprando\" o \"modificar carrito\"._"
+        )
+        try:
+            resp = self.send_message(conversation_id, footer)
+            responses.append(resp)
+        except Exception as e:
+            logger.error(f"Error sending checkout footer: {e}")
+        
+        return responses
 
 
 __all__ = ["KapsoClient"]
