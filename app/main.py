@@ -34,7 +34,7 @@ from .cart import (
     get_cart_by_conversation,
     get_cart_items,
     calculate_cart_total,
-    clear_cart
+    clear_cart_by_id
 )
 
 app = FastAPI(title="Fashion Store API", version="1.0.0")
@@ -831,7 +831,7 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
         logger.info(f"📦 {len(cart_items)} items agregados a la orden")
         
         # 8. Vaciar el carrito
-        clear_cart(cart_id)
+        clear_cart_by_id(cart_id)
         logger.info(f"🗑️ Carrito {cart_id} vaciado")
         
         conn.commit()

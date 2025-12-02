@@ -362,9 +362,9 @@ def calculate_cart_total(cart_id: int) -> float:
     return result[0] if result and result[0] else 0.0
 
 
-def clear_cart(cart_id: int):
+def clear_cart_by_id(cart_id: int):
     """
-    Vacía el carrito después de completar la compra
+    Vacía el carrito después de completar la compra usando el cart_id
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -563,10 +563,16 @@ def format_cart_summary(cart_items: List[Dict], total: float) -> str:
     
     items_text = []
     for i, item in enumerate(cart_items, 1):
-        subtotal = item['price'] * item['quantity']
+        # Usar las claves correctas que vienen de get_cart()
+        price = float(item.get('price_mxn', 0))
+        quantity = int(item.get('quantity', 1))
+        name = item.get('prod_name', 'Producto sin nombre')
+        color = item.get('colour_group_name', 'N/A')
+        
+        subtotal = price * quantity
         items_text.append(
-            f"{i}. *{item['name']}* ({item.get('color', 'N/A')})\n"
-            f"   Cantidad: {item['quantity']} | Subtotal: ${subtotal:.2f} MXN"
+            f"{i}. *{name}* ({color})\n"
+            f"   Cantidad: {quantity} | Subtotal: ${subtotal:.2f} MXN"
         )
     
     items_section = "\n\n".join(items_text)

@@ -17,7 +17,7 @@ from ..cart import (
     format_cart_summary,
     calculate_cart_total,
     get_cart_by_conversation,
-    clear_cart as clear_cart_func,
+    clear_cart_by_id,
     save_recent_products,
 )
 from .retriever import search_products
@@ -609,7 +609,7 @@ def handle_cart_interaction(
         
         # Vaciar el carrito
         items_count = len(cart_items)
-        clear_cart_func(cart_id)
+        clear_cart_by_id(cart_id)
         logger.info(f"✅ Carrito vaciado - {items_count} items eliminados")
         
         response = (
