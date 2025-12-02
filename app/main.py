@@ -16,6 +16,7 @@ load_dotenv()
 from .db import count_embeddings, get_connection
 from .loader import load_products_to_db
 from kapso.use_kapso import use_kapso
+from kapso.client import KapsoClient
 from .schemas import (
     Product,
     SearchRequest,
@@ -830,12 +831,50 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
         
         logger.info(f"📦 {len(cart_items)} items agregados a la orden")
         
-        # 8. Vaciar el carrito
-        clear_cart_by_id(cart_id)
-        logger.info(f"🗑️ Carrito {cart_id} vaciado")
-        
         conn.commit()
         conn.close()
+        
+        # 8. Enviar mensaje de confirmación de compra por WhatsApp
+        if conversation_id:
+            try:
+                with KapsoClient() as kapso:
+                    # Construir mensaje de confirmación
+                    items_summary = []
+                    for i, item in enumerate(cart_items[:10], start=1):  # Limitar a 10 items para el mensaje
+                        items_summary.append(
+                            f"{i}. {item['name']} x{item['quantity']} - ${item['subtotal']:.2f} MXN"
+                        )
+                    
+                    if len(cart_items) > 10:
+                        items_summary.append(f"... y {len(cart_items) - 10} producto(s) más")
+                    
+                    confirmation_message = (
+                        f"🎉 *¡COMPRA CONFIRMADA!*\n\n"
+                        f"✅ Tu orden #{order_id} ha sido procesada exitosamente.\n\n"
+                        f"*Resumen de tu compra:*\n"
+                        f"{chr(10).join(items_summary)}\n\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"💰 *Total pagado: ${total_amount:.2f} MXN*\n"
+                        f"━━━━━━━━━━━━━━━━━━\n\n"
+                    )
+                    
+                    if shipping_address:
+                        confirmation_message += f"📍 *Dirección de envío:*\n{shipping_address}\n\n"
+                    
+                    confirmation_message += (
+                        f"📦 Recibirás un correo de confirmación con los detalles de tu pedido.\n"
+                        f"🚚 Te notificaremos cuando tu orden sea enviada.\n\n"
+                        f"¡Gracias por tu compra! 🛍️"
+                    )
+                    
+                    kapso.send_message(conversation_id, confirmation_message)
+                    logger.info(f"✅ Mensaje de confirmación enviado a conversación {conversation_id}")
+            except Exception as e:
+                logger.error(f"❌ Error enviando mensaje de confirmación: {e}")
+        
+        # 9. Vaciar el carrito
+        clear_cart_by_id(cart_id)
+        logger.info(f"🗑️ Carrito {cart_id} vaciado")
         
         total_time = time.time() - start_time
         
