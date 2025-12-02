@@ -21,6 +21,8 @@ from ..cart import (
     get_cart_items_for_display,
     clear_cart as clear_cart_func,
     save_recent_products,
+    update_cart_item_quantity,
+    remove_cart_items_by_article_ids,
 )
 from .retriever import search_products
 from models import ConversationMessage
@@ -115,9 +117,16 @@ REGLAS:
    - mode = "add_to_cart"
    - product_index = número del producto en la lista reciente (1, 2, 3, ...) SI se puede inferir.
 
-4. Si el usuario quiere QUITAR/ELIMINAR un producto del carrito ("quita el producto X", "elimina", "no quiero el producto 1"):
-   - mode = "remove_from_cart"
-   - product_index = número del producto EN EL CARRITO (1, 2, 3, ...)
+4. Si el usuario quiere QUITAR/ELIMINAR productos del carrito - INCLUYE TODAS estas variantes:
+   - Por número: "quita el producto 1", "elimina el producto 2"
+   - Por nombre: "quita los jeans", "elimina el sweater azul", "quita esa camisa"
+   - Por categoría: "quita todos los bottoms", "elimina todas las faldas", "quita todos los tops"
+   - Por color: "quita todo lo rojo", "elimina las prendas azules"
+   - Por precio: "quita lo que cueste menos de 500", "elimina lo más caro"
+   - Cantidad parcial: "quita 3 de los 5 sweaters", "elimina 2 camisas"
+   - Múltiples: "quita los jeans y las camisetas"
+   → mode = "remove_from_cart"
+   - product_index = número del producto EN EL CARRITO (1, 2, 3, ...) SI es por número, NULL si es otra forma
 
 5. Si el usuario quiere PROCEDER AL PAGO ("pagar", "checkout", "proceder al pago", "comprar", "finalizar compra", "quiero pagar", "pagar ahora"):
    - mode = "checkout"
@@ -443,6 +452,192 @@ Ejemplos de respuesta:
     return response.choices[0].message.content.strip()
 
 
+def parse_advanced_removal_request(
+    user_message: str,
+    cart_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Analiza solicitudes complejas de eliminación del carrito como:
+    - "quita todos los jeans"
+    - "elimina todos los bottoms"
+    - "quita cualquier prenda bajo 500"
+    - "quita 3 de mis 5 sweaters"
+    - "elimina las camisas azules"
+    - "quita todo lo que sea rojo"
+    
+    Returns:
+        Dict con:
+        - removal_type: "all" | "by_category" | "by_type" | "by_price" | "by_color" | "by_name" | "partial_quantity" | "specific"
+        - items_to_remove: List de article_ids a eliminar
+        - quantity_changes: Dict de {article_id: new_quantity} para cambios parciales
+        - description: Descripción de lo que se va a eliminar
+        - confidence: float
+        - needs_confirmation: bool
+    """
+    if not cart_items:
+        return {
+            "removal_type": "none",
+            "items_to_remove": [],
+            "quantity_changes": {},
+            "description": "El carrito está vacío",
+            "confidence": 0.0,
+            "needs_confirmation": False,
+        }
+    
+    # Formatear items del carrito con detalles
+    cart_text = "\n".join(
+        [
+            f"Item {i+1}: article_id={item['article_id']} | "
+            f"Nombre: {item['prod_name']} | "
+            f"Color: {item['colour_group_name']} | "
+            f"Tipo: {item['product_type_name']} | "
+            f"Categoría: {item['product_group_name']} | "
+            f"Precio: ${item['price_mxn']:.2f} MXN | "
+            f"Cantidad: {item['quantity']}"
+            for i, item in enumerate(cart_items)
+        ]
+    )
+    
+    prompt = f"""Eres un agente experto que interpreta solicitudes de eliminación de productos del carrito de compras.
+
+MENSAJE DEL USUARIO:
+"{user_message}"
+
+PRODUCTOS EN EL CARRITO:
+{cart_text}
+
+Tu tarea es analizar QUÉ productos quiere eliminar el usuario. Las solicitudes pueden ser:
+
+1. **Por nombre específico**: "quita el suéter blanco", "elimina la camisa azul"
+2. **Por categoría/grupo**: "quita todos los jeans", "elimina todos los bottoms", "quita todas las faldas"
+3. **Por tipo de prenda**: "quita todas las camisetas", "elimina todos los vestidos"
+4. **Por color**: "quita todo lo rojo", "elimina las prendas azules"
+5. **Por precio**: "quita todo lo que cueste menos de 500", "elimina las prendas más caras de 1000"
+6. **Cantidad parcial**: "quita 3 de mis 5 sweaters", "elimina 2 camisas de las 4 que tengo"
+7. **Todos**: "vacía el carrito", "quita todo"
+
+INSTRUCCIONES:
+1. Identifica qué productos del carrito coinciden con la solicitud del usuario
+2. Para cada producto que coincida, incluye su article_id en la lista
+3. Si es una eliminación parcial de cantidad, indica la nueva cantidad que debe quedar
+4. Si la solicitud es ambigua, establece needs_confirmation = true
+5. Si no hay coincidencias claras, devuelve items_to_remove vacío
+
+Responde SOLO con un JSON válido:
+{{
+  "removal_type": "all" | "by_category" | "by_type" | "by_price" | "by_color" | "by_name" | "partial_quantity" | "specific" | "none",
+  "items_to_remove": ["article_id1", "article_id2", ...],
+  "quantity_changes": {{"article_id": new_quantity, ...}},
+  "description": "Descripción breve de lo que se eliminará",
+  "matched_items_summary": "Lista resumida de items que coinciden",
+  "confidence": 0.0 a 1.0,
+  "needs_confirmation": true | false
+}}
+
+IMPORTANTE:
+- Para "partial_quantity", usa quantity_changes para indicar la nueva cantidad (no la cantidad a quitar)
+- Por ejemplo, si hay 5 sweaters y el usuario quiere quitar 3, quantity_changes debería ser {{"article_id": 2}}
+- Si el usuario quiere quitar TODO de un producto, inclúyelo en items_to_remove (no en quantity_changes)
+- Sé inteligente con sinónimos: "bottoms" incluye jeans, pantalones, shorts, faldas, etc.
+- "tops" incluye camisetas, camisas, blusas, sweaters, etc."""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=500,
+        temperature=0.1,
+    )
+    
+    content = response.choices[0].message.content.strip()
+    
+    try:
+        data = json.loads(content)
+        
+        return {
+            "removal_type": data.get("removal_type", "none"),
+            "items_to_remove": data.get("items_to_remove", []),
+            "quantity_changes": data.get("quantity_changes", {}),
+            "description": data.get("description", ""),
+            "matched_items_summary": data.get("matched_items_summary", ""),
+            "confidence": float(data.get("confidence", 0.0)),
+            "needs_confirmation": bool(data.get("needs_confirmation", True)),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        logger.error(f"Error parsing advanced removal response: {e}")
+        return {
+            "removal_type": "none",
+            "items_to_remove": [],
+            "quantity_changes": {},
+            "description": "Error procesando solicitud",
+            "matched_items_summary": "",
+            "confidence": 0.0,
+            "needs_confirmation": True,
+        }
+
+
+def execute_cart_removal(
+    conversation_id: str,
+    removal_result: Dict[str, Any],
+    cart_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Ejecuta la eliminación de productos del carrito basado en el resultado del parsing.
+    
+    Returns:
+        Dict con:
+        - success: bool
+        - items_removed: int
+        - items_updated: int
+        - details: str (descripción de lo que se hizo)
+    """
+    items_removed = 0
+    items_updated = 0
+    removed_names = []
+    updated_names = []
+    
+    # Procesar eliminaciones completas
+    items_to_remove = removal_result.get("items_to_remove", [])
+    if items_to_remove:
+        # Find names for removed items
+        for article_id in items_to_remove:
+            item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
+            if item:
+                removed_names.append(f"{item['prod_name']} ({item['colour_group_name']})")
+        
+        count = remove_cart_items_by_article_ids(conversation_id, items_to_remove)
+        items_removed = count
+    
+    # Procesar cambios de cantidad
+    quantity_changes = removal_result.get("quantity_changes", {})
+    for article_id, new_quantity in quantity_changes.items():
+        item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
+        if item:
+            old_qty = item["quantity"]
+            if update_cart_item_quantity(conversation_id, str(article_id), int(new_quantity)):
+                items_updated += 1
+                updated_names.append(
+                    f"{item['prod_name']}: {old_qty} → {new_quantity}"
+                )
+    
+    # Build details message
+    details_parts = []
+    if removed_names:
+        details_parts.append(f"Eliminados: {', '.join(removed_names)}")
+    if updated_names:
+        details_parts.append(f"Actualizados: {', '.join(updated_names)}")
+    
+    details = " | ".join(details_parts) if details_parts else "No se realizaron cambios"
+    
+    return {
+        "success": items_removed > 0 or items_updated > 0,
+        "items_removed": items_removed,
+        "items_updated": items_updated,
+        "removed_names": removed_names,
+        "updated_names": updated_names,
+        "details": details,
+        }
+
+
 def handle_cart_interaction(
     conversation_id: str,
     user_message: str,
@@ -502,10 +697,10 @@ def handle_cart_interaction(
         response = "🛒 *TU CARRITO ACTUAL*\n\nEstos son los productos en tu carrito:"
         
         # Return cart items for image display
-        return {
-            "handled": True, 
+            return {
+                "handled": True,
             "response": response, 
-            "products": [],
+                "products": [],
             "send_images": True,
             "image_type": "cart",
             "cart_items": display_items,
@@ -575,11 +770,11 @@ def handle_cart_interaction(
         
         # NOTE: Cart is NOT cleared here - it stays until payment is confirmed
         # This allows the user to go back and modify the cart
-        
-        return {
-            "handled": True, 
+                
+                return {
+                    "handled": True,
             "response": response, 
-            "products": [],
+                    "products": [],
             "send_images": True,
             "image_type": "checkout",
             "cart_items": display_items,
@@ -667,7 +862,8 @@ def handle_cart_interaction(
         )
         return {"handled": True, "response": response, "products": [], "send_images": False}
 
-    # Quitar del carrito
+    # Quitar del carrito - VERSIÓN AVANZADA
+    # Soporta: por nombre, categoría, tipo, color, precio, cantidad parcial
     if mode == "remove_from_cart":
         logger.info(f"➖ Usuario quiere quitar del carrito - ConvID: {conversation_id}")
         
@@ -681,122 +877,122 @@ def handle_cart_interaction(
                 "send_images": False,
             }
         
-        index = intent.get("product_index")
-        needs_confirmation = intent.get("needs_confirmation", False)
-        confidence = float(intent.get("confidence", 0.0))
+        # Usar el parser avanzado para entender qué quiere eliminar el usuario
+        removal_result = parse_advanced_removal_request(user_message, cart_items)
         
-        product = None
-        resolved_index = index
-        article_id = None
+        logger.info(
+            f"🔍 Análisis de eliminación - "
+            f"Tipo: {removal_result['removal_type']}, "
+            f"Items a eliminar: {len(removal_result['items_to_remove'])}, "
+            f"Cambios de cantidad: {len(removal_result['quantity_changes'])}, "
+            f"Confianza: {removal_result['confidence']:.2f}"
+        )
         
-        # Si no hay índice numérico, intentar resolver por descripción usando productos del carrito
-        if not index or index <= 0:
-            reference_result = resolve_cart_product_reference(user_message, cart_items)
-            
-            if reference_result["resolved"]:
-                resolved_index = reference_result["product_index"]
-                article_id = reference_result["article_id"]
-                confidence = reference_result["confidence"]
-                # Si la confianza de la resolución es baja, necesita confirmación
-                if confidence < 0.7:
-                    needs_confirmation = True
-            else:
-                # No se pudo resolver la referencia
-                cart_list = []
-                for i, item in enumerate(cart_items[:5], start=1):
-                    cart_list.append(
-                        f"Producto {i}: {item['prod_name']} ({item['colour_group_name']})"
-                    )
-                cart_text = ", ".join(cart_list)
-                
-                return {
-                    "handled": True,
-                    "response": (
-                        f"No pude identificar exactamente qué producto quieres quitar del carrito. "
-                        f"Puedes referirte a los productos por número (del 1 al {len(cart_items)}) "
-                        "o por descripción (ej: \"quita el producto 1\", \"elimina la camisa verde\"). "
-                        f"Productos en tu carrito: {cart_text}"
-                    ),
-                    "products": [],
-                    "send_images": False,
-                }
-        else:
-            # Buscar producto por posición en el carrito
-            if 1 <= index <= len(cart_items):
-                product = cart_items[index - 1]  # Convertir a 0-indexed
-                article_id = product["article_id"]
-            else:
-                return {
-                    "handled": True,
-                    "response": (
-                        f"No encontré el producto {index} en tu carrito. "
-                        f"Actualmente tienes {len(cart_items)} producto(s). "
-                        "Puedes decirme, por ejemplo, \"quita el producto 1\"."
-                    ),
-                    "products": [],
-                    "send_images": False,
-                }
-        
-        # Si no se encontró el producto, intentar resolver
-        if not product and not article_id:
-            reference_result = resolve_cart_product_reference(user_message, cart_items)
-            if reference_result["resolved"]:
-                resolved_index = reference_result["product_index"]
-                article_id = reference_result["article_id"]
-                confidence = reference_result["confidence"]
-                if 1 <= resolved_index <= len(cart_items):
-                    product = cart_items[resolved_index - 1]
-                if confidence < 0.7:
-                    needs_confirmation = True
-        
-        if not product and not article_id:
-            return {
-                "handled": True,
-                "response": (
-                    f"No pude identificar qué producto quieres quitar. "
-                    f"Tu carrito tiene {len(cart_items)} producto(s). "
-                    "Puedes decirme, por ejemplo, \"quita el producto 1\" o \"elimina la camisa verde\"."
-                ),
-                "products": [],
-                "send_images": False,
-            }
-        
-        # Si necesita confirmación o la confianza es baja, NO modificamos el carrito
-        if needs_confirmation or confidence < 0.8:
-            product_name = product.get("prod_name", "ese producto") if product else "ese producto"
-            product_color = product.get("colour_group_name", "") if product else ""
-            color_text = f" ({product_color})" if product_color else ""
+        # Si no se encontró nada que eliminar
+        if removal_result["removal_type"] == "none" or (
+            not removal_result["items_to_remove"] and not removal_result["quantity_changes"]
+        ):
+            # Fallback: mostrar el carrito para que el usuario pueda especificar
+            cart_list = []
+            for i, item in enumerate(cart_items, start=1):
+                cart_list.append(
+                    f"{i}. *{item['prod_name']}* ({item['colour_group_name']}) - "
+                    f"${item['price_mxn']:.2f} MXN x{item['quantity']}"
+                )
+            cart_text = "\n".join(cart_list)
             
             response = (
-                f"Entiendo que quieres quitar el Producto {resolved_index}: {product_name}{color_text}. "
-                "Solo para confirmar, ¿quieres que lo elimine del carrito? "
-                "Puedes decirme \"sí, quita el producto "
-                f"{resolved_index}\" o simplemente \"sí\"."
+                f"No encontré productos que coincidan con tu solicitud en el carrito.\n\n"
+                f"Tu carrito actual:\n{cart_text}\n\n"
+                f"Puedes decirme:\n"
+                f"• \"Quita el producto 1\" (por número)\n"
+                f"• \"Quita los jeans\" (por nombre/tipo)\n"
+                f"• \"Quita todo lo rojo\" (por color)\n"
+                f"• \"Quita lo que cueste menos de 500\" (por precio)\n"
+                f"• \"Quita 2 de los sweaters\" (cantidad parcial)"
             )
             return {"handled": True, "response": response, "products": [], "send_images": False}
         
-        # Confianza alta: procedemos a quitar del carrito
-        remove_from_cart(conversation_id, article_id)
+        # Si necesita confirmación (confianza baja o eliminación masiva)
+        items_to_remove_count = len(removal_result["items_to_remove"])
+        quantity_changes_count = len(removal_result["quantity_changes"])
+        total_affected = items_to_remove_count + quantity_changes_count
         
-        product_name = product.get("prod_name", "el producto") if product else "el producto"
-        product_color = product.get("colour_group_name", "") if product else ""
-        color_text = f" ({product_color})" if product_color else ""
-        
-        logger.info(
-            f"✅ Producto quitado del carrito - "
-            f"ArticleID: {article_id}, "
-            f"Nombre: {product_name}, "
-            f"ConvID: {conversation_id}"
+        needs_confirmation = (
+            removal_result["needs_confirmation"] or 
+            removal_result["confidence"] < 0.75 or
+            total_affected > 2  # Pedir confirmación si se afectan más de 2 items
         )
+        
+        if needs_confirmation:
+            # Construir mensaje de confirmación
+            affected_items = []
+            
+            for article_id in removal_result["items_to_remove"]:
+                item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
+                if item:
+                    affected_items.append(f"• Eliminar: *{item['prod_name']}* ({item['colour_group_name']})")
+            
+            for article_id, new_qty in removal_result["quantity_changes"].items():
+                item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
+                if item:
+                    affected_items.append(
+                        f"• Reducir: *{item['prod_name']}* de {item['quantity']} a {new_qty} unidades"
+                    )
+            
+            affected_text = "\n".join(affected_items) if affected_items else removal_result.get("description", "productos")
         
         response = (
-            f"✅ He quitado del carrito:\n\n"
-            f"*{product_name}*{color_text}\n\n"
-            f"¿Qué deseas hacer ahora?\n"
-            f"• \"Ver carrito\" - Ver tu carrito actualizado\n"
-            f"• \"Seguir comprando\" - Buscar más productos\n"
-            f"• \"Proceder al pago\" - Si estás listo"
+                f"⚠️ Voy a realizar estos cambios en tu carrito:\n\n"
+                f"{affected_text}\n\n"
+                f"¿Confirmas que quieres hacer esto?\n"
+                f"Responde \"sí\" para confirmar o \"no\" para cancelar."
+            )
+            
+            # Store the pending removal for confirmation
+            # For now, we'll just return and let the user confirm with a clear statement
+            return {"handled": True, "response": response, "products": [], "send_images": False}
+        
+        # Confianza alta: ejecutar la eliminación
+        execution_result = execute_cart_removal(conversation_id, removal_result, cart_items)
+        
+        logger.info(
+            f"✅ Eliminación ejecutada - "
+            f"Items eliminados: {execution_result['items_removed']}, "
+            f"Items actualizados: {execution_result['items_updated']}, "
+            f"Detalles: {execution_result['details']}"
         )
+        
+        # Construir mensaje de respuesta
+        response_parts = ["✅ *Cambios realizados en tu carrito:*\n"]
+        
+        if execution_result["removed_names"]:
+            response_parts.append("*Eliminados:*")
+            for name in execution_result["removed_names"]:
+                response_parts.append(f"  • {name}")
+        
+        if execution_result["updated_names"]:
+            response_parts.append("\n*Cantidades actualizadas:*")
+            for update in execution_result["updated_names"]:
+                response_parts.append(f"  • {update}")
+        
+        # Mostrar resumen del carrito actualizado
+        updated_cart = get_cart(conversation_id)
+        if updated_cart:
+            cart_id = get_cart_by_conversation(conversation_id)
+            new_total = calculate_cart_total(cart_id) if cart_id else 0.0
+            response_parts.append(f"\n💰 *Nuevo total:* ${new_total:.2f} MXN ({len(updated_cart)} productos)")
+        else:
+            response_parts.append("\n🛒 Tu carrito ahora está vacío.")
+        
+        response_parts.append(
+            "\n¿Qué deseas hacer?\n"
+            "• \"Ver carrito\" - Ver detalles\n"
+            "• \"Seguir comprando\" - Buscar más\n"
+            "• \"Proceder al pago\" - Si estás listo"
+        )
+        
+        response = "\n".join(response_parts)
         return {"handled": True, "response": response, "products": [], "send_images": False}
 
     # Agregar al carrito usando posición de producto reciente
@@ -846,23 +1042,23 @@ def handle_cart_interaction(
                 )
 
                 if not search_query:
-                    max_idx = max(p["position"] for p in recent) if recent else 0
-                    products_list = []
-                    for p in recent[:5]:
-                        products_list.append(
-                            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
-                        )
-                    products_text = ", ".join(products_list)
-                    
-                    return {
-                        "handled": True,
-                        "response": (
+                max_idx = max(p["position"] for p in recent) if recent else 0
+                products_list = []
+                for p in recent[:5]:
+                    products_list.append(
+                        f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
+                    )
+                products_text = ", ".join(products_list)
+                
+                return {
+                    "handled": True,
+                    "response": (
                             "No pude identificar exactamente qué producto quieres agregar. "
-                            f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
-                            "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
-                            f"Productos disponibles: {products_text}"
-                        ),
-                        "products": [],
+                        f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
+                        "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
+                        f"Productos disponibles: {products_text}"
+                    ),
+                    "products": [],
                         "send_images": False,
                     }
 

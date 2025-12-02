@@ -106,6 +106,85 @@ def remove_from_cart(conversation_id: str, article_id: str) -> None:
     conn.close()
 
 
+def update_cart_item_quantity(conversation_id: str, article_id: str, new_quantity: int) -> bool:
+    """
+    Actualiza la cantidad de un producto en el carrito.
+    Si new_quantity <= 0, elimina el producto del carrito.
+    
+    Returns:
+        True si se actualizó/eliminó correctamente, False si no se encontró
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT id FROM carts WHERE conversation_id = ?",
+        (conversation_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    cart_id = row[0]
+    
+    if new_quantity <= 0:
+        # Eliminar el item si la cantidad es 0 o menor
+        cur.execute(
+            "DELETE FROM cart_items WHERE cart_id = ? AND article_id = ?",
+            (cart_id, article_id),
+        )
+    else:
+        # Actualizar la cantidad
+        cur.execute(
+            "UPDATE cart_items SET quantity = ? WHERE cart_id = ? AND article_id = ?",
+            (new_quantity, cart_id, article_id),
+        )
+    
+    conn.commit()
+    rows_affected = cur.rowcount
+    conn.close()
+    
+    return rows_affected > 0
+
+
+def remove_cart_items_by_article_ids(conversation_id: str, article_ids: List[str]) -> int:
+    """
+    Elimina múltiples productos del carrito por sus article_ids.
+    
+    Returns:
+        Número de items eliminados
+    """
+    if not article_ids:
+        return 0
+    
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT id FROM carts WHERE conversation_id = ?",
+        (conversation_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return 0
+
+    cart_id = row[0]
+    
+    # Build placeholders for IN clause
+    placeholders = ",".join(["?" for _ in article_ids])
+    query = f"DELETE FROM cart_items WHERE cart_id = ? AND article_id IN ({placeholders})"
+    
+    cur.execute(query, [cart_id] + article_ids)
+    
+    conn.commit()
+    rows_deleted = cur.rowcount
+    conn.close()
+    
+    return rows_deleted
+
+
 def clear_cart(conversation_id: str) -> None:
     """
     Vacía por completo el carrito del usuario.
