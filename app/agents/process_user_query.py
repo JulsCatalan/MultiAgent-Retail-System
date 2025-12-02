@@ -6,7 +6,9 @@ from .query_builder import build_search_query
 from .retriever import search_products
 from .generator import generate_response
 from .cart_agent import handle_cart_interaction
+from .preference_extractor import process_and_save_preferences
 from ..cart import save_recent_products
+from ..preferences import get_user_preferences
 from models import User, ConversationMessage
 from kapso.client import KapsoClient
 
@@ -169,6 +171,22 @@ async def process_user_query(
     if conversation_context is None:
         conversation_context = get_conversation_messages(user, kapso_client=kapso_client)
 
+    # 0) Extraer y guardar preferencias del usuario del mensaje y contexto
+    user_preferences = []
+    if user.conversation_id:
+        try:
+            process_and_save_preferences(
+                conversation_id=user.conversation_id,
+                user_message=user_message,
+                conversation_context=conversation_context
+            )
+            # Obtener todas las preferencias guardadas del usuario
+            user_preferences = get_user_preferences(user.conversation_id)
+            if user_preferences:
+                print(f"👤 Preferencias del usuario: {len(user_preferences)} encontradas")
+        except Exception as e:
+            print(f"⚠️ Error procesando preferencias: {e}")
+
     # 1) Pasar el contexto al router para que tome una mejor decisión (incluye detección de carrito)
     routing = route_query(user_message, conversation_context=conversation_context)
     print("📝 Routing: %s", routing)
@@ -190,12 +208,13 @@ async def process_user_query(
             "routing_decision": routing["decision"],
             "conversation_history": conversation_context,
         }
-    # 2) Si el router detectó intención de carrito, manejar la interacción
-    if routing["decision"] == "cart":
+    elif routing["decision"] == "cart":
+        # 2) Si el router detectó intención de carrito, manejar la interacción
         if user.conversation_id:
             cart_result = handle_cart_interaction(
                 conversation_id=user.conversation_id,
                 user_message=user_message,
+                conversation_context=conversation_context,
             )
         else:
             cart_result = {"handled": False, "response": "Necesitas un conversation_id para usar el carrito."}
@@ -232,20 +251,50 @@ async def process_user_query(
             # fallback a respuesta general
             response = "No pude procesar tu solicitud de carrito. Por favor, intenta de nuevo."
             products = []
-    
-    # Si el routing es "general", generar respuesta sin buscar productos
-    if routing["decision"] == "general":
+    elif routing["decision"] == "general":
+        # Si el routing es "general", generar respuesta sin buscar productos
         products = []
         response = generate_response(
             user_message=user_message,
             products=products,
             conversation_context=conversation_context,
             routing_decision=routing["decision"],
+            user_preferences=user_preferences,
+        )
+    elif routing["decision"] == "suggestion":
+        # Si es "suggestion", el usuario mencionó preferencias sin buscar algo específico
+        # Construir query basada en preferencias del usuario
+        optimized_query = build_search_query(
+            user_message=user_message,
+            conversation_context=conversation_context,
+            user_preferences=user_preferences,
+            is_suggestion=True
+        )
+
+        # Buscar productos usando la query optimizada basada en preferencias
+        products = search_products(optimized_query)
+
+        # Guardar productos recientes para poder referenciarlos como "Producto 1", etc.
+        if user.conversation_id:
+            try:
+                save_recent_products(user.conversation_id, products)
+            except Exception as e:
+                print("⚠️ Error guardando productos recientes: %s", e)
+
+        response = generate_response(
+            user_message=user_message,
+            products=products,
+            conversation_context=conversation_context,
+            routing_decision="suggestion",  # Pasar "suggestion" para que el generator sepa que es una sugerencia
+            user_preferences=user_preferences,
         )
     else:
         # Si es "search", primero construir la query optimizada usando todo el contexto
         optimized_query = build_search_query(
-            user_message, conversation_context=conversation_context
+            user_message=user_message,
+            conversation_context=conversation_context,
+            user_preferences=user_preferences,
+            is_suggestion=False
         )
 
         # Luego buscar productos usando la query optimizada
@@ -263,6 +312,7 @@ async def process_user_query(
             products=products,
             conversation_context=conversation_context,
             routing_decision=routing["decision"],
+            user_preferences=user_preferences,
         )
     
     # Enviar mensaje a través de Kapso si el cliente está disponible
