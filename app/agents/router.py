@@ -78,7 +78,7 @@ REGLAS DE DECISIÓN:
 3. Los mensajes más recientes tienen MÁS peso que los antiguos
 
 Debes decidir entre CINCO opciones:
-- "cart": Si el usuario quiere interactuar con su carrito de compras (ver carrito, agregar producto al carrito, quitar del carrito, etc.). Ejemplos: "muéstrame mi carrito", "agrega el producto 1 al carrito", "quiero agregar el suéter blanco", "qué tengo en el carrito"
+- "cart": Si el usuario quiere interactuar con su carrito de compras (ver carrito, agregar producto al carrito, quitar del carrito, comprar los productos de su carrito, etc.). Ejemplos: "muéstrame mi carrito", "agrega el producto 1 al carrito", "quiero agregar el suéter blanco", "qué tengo en el carrito"
 - "search": Si el usuario busca productos específicos (relacionados a prendas de ropa) con características claras, recomienda ropa, pregunta por categorías, colores, precios, tallas, etc. Ejemplos: "busco camisa verde", "quiero ver pantalones azules", "muéstrame suéteres". Incluso si menciona "verde", "esa prenda", "quiero ver la verde" en el mensaje actual o reciente PERO NO menciona carrito, es "search"
 - "suggestion": Si el usuario menciona información personal o preferencias (ej: "soy muy friolento", "tengo sobrepeso", "me gusta el estilo casual", "busco algo para trabajar") PERO NO especifica exactamente qué producto busca, es "suggestion". El usuario está dando contexto sobre sus necesidades para que le sugieras productos adecuados.
 - "general": Si es un saludo, pregunta general sobre la tienda, agradecimiento, o no requiere búsqueda de productos específicos ni interacción con carrito

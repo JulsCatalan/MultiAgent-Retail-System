@@ -1,6 +1,7 @@
 from .utils import normalize_kapso_webhook, extract_message_ids_from_webhook, mark_whatsapp_messages_as_read_batch
 from .message_deduplicator import message_deduplicator
 import logging
+import asyncio
 from models import User, UserMetadata
 from app.agents.process_user_query import process_user_query
 from .client import KapsoClient
@@ -172,12 +173,10 @@ async def handle_response(data_list: list) -> dict:
                 # PASO 2: Agente normal (Router → Retriever → Generator)
                 logger.info("🤖 Usando agente normal")
                 
-                import asyncio as inner_asyncio
-                
                 try:
                     # Ejecutar async function en nuevo loop
-                    agent_loop = inner_asyncio.new_event_loop()
-                    inner_asyncio.set_event_loop(agent_loop)
+                    agent_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(agent_loop)
                     
                     result = agent_loop.run_until_complete(
                         process_user_query(user, combined_message, kapso_client=None)
