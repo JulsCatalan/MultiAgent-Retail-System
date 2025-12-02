@@ -846,7 +846,7 @@ def handle_cart_interaction(
                     "products": catalog_products,
                 }
         
-        # Buscar producto por posición resuelta
+        # Buscar producto por posición resuelta (esto se ejecuta si index existe o si se resolvió la referencia)
         if resolved_index:
             product = next((p for p in recent if p["position"] == resolved_index), None)
         
