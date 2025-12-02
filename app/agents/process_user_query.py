@@ -173,6 +173,23 @@ async def process_user_query(
     routing = route_query(user_message, conversation_context=conversation_context)
     print("📝 Routing: %s", routing)
     
+    if routing["decision"] == "disregard":
+        response = "Solo puedo ayudarte con cosas relacionadas a nuestra tienda ecommerce de ropa."
+        products = []
+        if kapso_client is not None and user.conversation_id:
+            try:
+                print("📤 Enviando respuesta a conversación %s", user.conversation_id)
+                kapso_client.send_message(user.conversation_id, response)
+                message_sent = True
+                print("✅ Mensaje enviado exitosamente")
+            except Exception as e:
+                print("❌ Error enviando mensaje por Kapso: %s", e)
+        return {
+            "response": response,
+            "products": products,
+            "routing_decision": routing["decision"],
+            "conversation_history": conversation_context,
+        }
     # 2) Si el router detectó intención de carrito, manejar la interacción
     if routing["decision"] == "cart":
         if user.conversation_id:

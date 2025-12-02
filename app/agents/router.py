@@ -77,14 +77,15 @@ REGLAS DE DECISIÓN:
 2. Si el mensaje actual o los mensajes recientes (Peso ALTO) mencionan una prenda específica (color, tipo, etc.), esa es la consulta actual, ignorando otras prendas mencionadas anteriormente
 3. Los mensajes más recientes tienen MÁS peso que los antiguos
 
-Debes decidir entre TRES opciones:
+Debes decidir entre CUATRO opciones:
 - "cart": Si el usuario quiere interactuar con su carrito de compras (ver carrito, agregar producto al carrito, quitar del carrito, etc.). Ejemplos: "muéstrame mi carrito", "agrega el producto 1 al carrito", "quiero agregar el suéter blanco", "qué tengo en el carrito"
 - "search": Si el usuario busca productos específicos, recomienda ropa, pregunta por categorías, colores, precios, tallas, etc. Incluso si menciona "verde", "esa prenda", "quiero ver la verde" en el mensaje actual o reciente PERO NO menciona carrito, es "search"
 - "general": Si es un saludo, pregunta general sobre la tienda, agradecimiento, o no requiere búsqueda de productos específicos ni interacción con carrito
+- "disregard": Si el usuario no menciona nada que se relacione con la tienda de ropa, prendas de ropa en general y nuestros servicios,  debes responder con "disregard", ejemplo quien es Cristian Castro, quien es el fundador de la empresa, etc.
 
 IMPORTANTE: Si el usuario menciona "carrito", "carro", "agregar al carrito", "ver carrito", etc., debe ser "cart". Si solo describe productos o hace preguntas sobre productos SIN mencionar carrito, es "search".
 
-Responde SOLO con una palabra: "cart", "search" o "general"
+Responde SIEMPRE SOLO con una palabra: "cart", "search" o "general o disregard"
 """
 
     response = client.chat.completions.create(
@@ -97,7 +98,7 @@ Responde SOLO con una palabra: "cart", "search" o "general"
     decision = response.choices[0].message.content.strip().lower()
     
     # Validar que la decisión sea una de las opciones válidas
-    if decision not in ["cart", "search", "general"]:
+    if decision not in ["cart", "search", "general, disregard"]:
         # Fallback: si no es válido, intentar inferir
         if "carrito" in user_message.lower() or "carro" in user_message.lower():
             decision = "cart"
