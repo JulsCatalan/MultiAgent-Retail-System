@@ -1,10 +1,95 @@
 # app/agents/query_builder.py
 from openai import OpenAI
 import os
-from typing import List, Optional
+import re
+from typing import List, Optional, Dict, Any
 from models import ConversationMessage
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def extract_price_constraints(user_message: str) -> Dict[str, Any]:
+    """
+    Extrae restricciones de precio del mensaje del usuario.
+    
+    Ejemplos:
+    - "productos de menos de 500" → max_price: 500
+    - "productos de más de 1000" → min_price: 1000
+    - "productos entre 200 y 500" → min_price: 200, max_price: 500
+    - "productos baratos" → max_price: 500 (default para "barato")
+    
+    Returns:
+        Dict con min_price y/o max_price si se detectan
+    """
+    constraints = {}
+    msg_lower = user_message.lower()
+    
+    # Patrones para detectar restricciones de precio
+    # "menos de X", "menor a X", "máximo X", "bajo X", "debajo de X"
+    max_patterns = [
+        r'menos de (\d+)',
+        r'menor a (\d+)',
+        r'menor de (\d+)',
+        r'maximo (\d+)',
+        r'máximo (\d+)',
+        r'bajo (\d+)',
+        r'debajo de (\d+)',
+        r'no más de (\d+)',
+        r'hasta (\d+)',
+        r'por debajo de (\d+)',
+    ]
+    
+    # "más de X", "mayor a X", "mínimo X", "arriba de X"
+    min_patterns = [
+        r'más de (\d+)',
+        r'mas de (\d+)',
+        r'mayor a (\d+)',
+        r'mayor de (\d+)',
+        r'mínimo (\d+)',
+        r'minimo (\d+)',
+        r'arriba de (\d+)',
+        r'por encima de (\d+)',
+        r'desde (\d+)',
+    ]
+    
+    # "entre X y Y"
+    range_patterns = [
+        r'entre (\d+) y (\d+)',
+        r'de (\d+) a (\d+)',
+    ]
+    
+    # Buscar patrones de rango primero
+    for pattern in range_patterns:
+        match = re.search(pattern, msg_lower)
+        if match:
+            constraints['min_price'] = float(match.group(1))
+            constraints['max_price'] = float(match.group(2))
+            return constraints
+    
+    # Buscar patrones de máximo
+    for pattern in max_patterns:
+        match = re.search(pattern, msg_lower)
+        if match:
+            constraints['max_price'] = float(match.group(1))
+            break
+    
+    # Buscar patrones de mínimo
+    for pattern in min_patterns:
+        match = re.search(pattern, msg_lower)
+        if match:
+            constraints['min_price'] = float(match.group(1))
+            break
+    
+    # Palabras clave para precios
+    if 'barato' in msg_lower or 'económico' in msg_lower or 'economico' in msg_lower:
+        if 'max_price' not in constraints:
+            constraints['max_price'] = 500.0  # Default para "barato"
+    
+    if 'caro' in msg_lower or 'premium' in msg_lower or 'exclusivo' in msg_lower:
+        if 'min_price' not in constraints:
+            constraints['min_price'] = 1000.0  # Default para "caro"
+    
+    return constraints
 
 def build_search_query(
     user_message: str,

@@ -2,7 +2,7 @@
 import logging
 from typing import List, Optional
 from .router import route_query
-from .query_builder import build_search_query
+from .query_builder import build_search_query, extract_price_constraints
 from .retriever import search_products
 from .generator import generate_response
 from .cart_agent import handle_cart_interaction
@@ -271,8 +271,11 @@ async def process_user_query(
             is_suggestion=True
         )
 
-        # Buscar productos usando la query optimizada basada en preferencias
-        products = search_products(optimized_query)
+        # Extraer restricciones de precio del mensaje
+        price_filters = extract_price_constraints(user_message)
+        
+        # Buscar productos usando la query optimizada y filtros de precio
+        products = search_products(optimized_query, filters=price_filters if price_filters else None)
 
         # Guardar productos recientes para poder referenciarlos como "Producto 1", etc.
         if user.conversation_id:
@@ -297,8 +300,13 @@ async def process_user_query(
             is_suggestion=False
         )
 
-        # Luego buscar productos usando la query optimizada
-        products = search_products(optimized_query)
+        # Extraer restricciones de precio del mensaje
+        price_filters = extract_price_constraints(user_message)
+        if price_filters:
+            logger.info(f"💰 Filtros de precio detectados: {price_filters}")
+        
+        # Luego buscar productos usando la query optimizada y filtros de precio
+        products = search_products(optimized_query, filters=price_filters if price_filters else None)
 
         # Guardar productos recientes para poder referenciarlos como "Producto 1", etc.
         if user.conversation_id:

@@ -467,6 +467,14 @@ Ejemplos de respuesta:
     return response.choices[0].message.content.strip()
 
 
+def normalize_text(text: str) -> str:
+    """Normaliza texto removiendo acentos para comparación."""
+    import unicodedata
+    # Normalize to decomposed form, then remove combining characters (accents)
+    normalized = unicodedata.normalize('NFD', text)
+    return ''.join(c for c in normalized if unicodedata.category(c) != 'Mn').lower()
+
+
 def try_direct_multi_number_parse(
     user_message: str,
     recent_products: List[Dict[str, Any]],
@@ -485,14 +493,22 @@ def try_direct_multi_number_parse(
     # Extraer todos los números
     numbers = re.findall(r'\b(\d+)\b', user_message)
     
+    logger.debug(f"🔢 Direct parser - Numbers found: {numbers}, Recent products: {len(recent_products) if recent_products else 0}, Cart items: {len(cart_items) if cart_items else 0}")
+    
     if len(numbers) < 2:  # Necesitamos al menos 2 para multi-action
         return None
     
-    msg_lower = user_message.lower()
+    # Normalizar texto para manejar acentos (agrégame → agregame)
+    msg_normalized = normalize_text(user_message)
     
-    # Determinar si es agregar o quitar
-    is_add = any(word in msg_lower for word in ["agrega", "añade", "agregar", "añadir", "add", "pon", "ponme"])
-    is_remove = any(word in msg_lower for word in ["quita", "elimina", "remove", "saca", "borra", "quitar"])
+    # Determinar si es agregar o quitar (con palabras normalizadas)
+    add_words = ["agrega", "anade", "anadir", "agregar", "add", "pon", "ponme", "agregame", "agregale", "ponle"]
+    remove_words = ["quita", "elimina", "remove", "saca", "borra", "quitar", "quitame", "quitale", "sacame"]
+    
+    is_add = any(word in msg_normalized for word in add_words)
+    is_remove = any(word in msg_normalized for word in remove_words)
+    
+    logger.debug(f"🔢 Direct parser - Normalized: '{msg_normalized}', is_add={is_add}, is_remove={is_remove}")
     
     # Si tiene ambos, no es un caso simple - usar LLM
     if is_add and is_remove:
@@ -1416,9 +1432,13 @@ def handle_cart_interaction(
     # Múltiples acciones de carrito en una sola petición
     if mode == "multi_action":
         logger.info(f"🔄 Usuario quiere realizar múltiples acciones - ConvID: {conversation_id}")
+        logger.info(f"📦 Recent products disponibles: {len(recent) if recent else 0}")
+        if recent:
+            logger.debug(f"📦 Recent positions: {[p.get('position') for p in recent]}")
         
         # Obtener estado actual
         current_cart_items = get_cart(conversation_id)
+        logger.info(f"🛒 Cart items disponibles: {len(current_cart_items) if current_cart_items else 0}")
         
         # Parsear la solicitud multi-acción
         multi_result = parse_multi_action_cart_request(
@@ -1429,13 +1449,67 @@ def handle_cart_interaction(
         
         logger.info(
             f"📋 Multi-acción parseada - "
+            f"has_multi_action: {multi_result['has_multi_action']}, "
             f"Agregar: {len(multi_result['items_to_add'])}, "
             f"Quitar: {len(multi_result['items_to_remove'])}, "
             f"Confirmación: {multi_result['needs_confirmation']}"
         )
         
         if not multi_result["has_multi_action"]:
-            # No se detectó multi-acción clara, mostrar ayuda
+            logger.warning(f"⚠️ Multi-acción no detectada - Mensaje: '{user_message}', Recent: {len(recent) if recent else 0}")
+            
+            # FALLBACK: Si hay números en el mensaje y productos recientes, intentar agregar directamente
+            import re
+            numbers = re.findall(r'\b(\d+)\b', user_message)
+            
+            if numbers and recent:
+                max_pos = max(p["position"] for p in recent) if recent else 0
+                valid_numbers = [int(n) for n in numbers if 1 <= int(n) <= max_pos]
+                
+                if valid_numbers:
+                    logger.info(f"🔄 FALLBACK: Intentando agregar productos {valid_numbers}")
+                    added = []
+                    failed = []
+                    
+                    for num in valid_numbers:
+                        prod = next((p for p in recent if p["position"] == num), None)
+                        if prod:
+                            try:
+                                add_to_cart(conversation_id, prod["article_id"], quantity=1)
+                                added.append(f"{prod['prod_name']} ({prod['colour_group_name']})")
+                                logger.info(f"✅ Agregado (fallback): {prod['prod_name']}")
+                            except Exception as e:
+                                logger.error(f"Error agregando producto: {e}")
+                                failed.append(str(num))
+                        else:
+                            failed.append(str(num))
+                    
+                    if added:
+                        response_parts = [f"✅ Agregué: {', '.join(added)}"]
+                        if failed:
+                            response_parts.append(f"⚠️ No encontré: productos {', '.join(failed)}")
+                        
+                        # Mostrar carrito actualizado
+                        updated_cart = get_cart(conversation_id)
+                        if updated_cart:
+                            cart_id = get_cart_by_conversation(conversation_id)
+                            total = calculate_cart_total(cart_id) if cart_id else 0.0
+                            response_parts.append(f"\n🛒 Carrito: {len(updated_cart)} producto(s) - ${total:.2f} MXN")
+                        
+                        response_parts.append("\n¿Algo más?")
+                        
+                        display_items = get_cart_items_for_display(conversation_id)
+                        return {
+                            "handled": True,
+                            "response": "\n".join(response_parts),
+                            "products": [],
+                            "send_images": True,
+                            "image_type": "cart",
+                            "cart_items": display_items,
+                            "cart_total": total if updated_cart else 0.0
+                        }
+            
+            # Si no funcionó el fallback, mostrar ayuda
             return {
                 "handled": True,
                 "response": (
