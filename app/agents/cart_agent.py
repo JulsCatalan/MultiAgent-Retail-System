@@ -658,7 +658,7 @@ def handle_cart_interaction(
         
         # Vaciar el carrito
         items_count = len(cart_items)
-        clear_cart_by_id(cart_id)
+        clear_cart_func(cart_id)
         logger.info(f"✅ Carrito vaciado - {items_count} items eliminados")
         
         response = (
@@ -846,30 +846,30 @@ def handle_cart_interaction(
                 )
 
                 if not search_query:
-                max_idx = max(p["position"] for p in recent) if recent else 0
-                products_list = []
-                for p in recent[:5]:
-                    products_list.append(
-                        f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
-                    )
-                products_text = ", ".join(products_list)
-                
-                return {
-                    "handled": True,
-                    "response": (
+                    max_idx = max(p["position"] for p in recent) if recent else 0
+                    products_list = []
+                    for p in recent[:5]:
+                        products_list.append(
+                            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']})"
+                        )
+                    products_text = ", ".join(products_list)
+                    
+                    return {
+                        "handled": True,
+                        "response": (
                             "No pude identificar exactamente qué producto quieres agregar. "
-                        f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
-                        "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
-                        f"Productos disponibles: {products_text}"
-                    ),
-                    "products": [],
+                            f"Puedes referirte a los productos por número (del 1 al {max_idx}) "
+                            "o por descripción (ej: \"el suéter blanco\", \"esa camisa verde\"). "
+                            f"Productos disponibles: {products_text}"
+                        ),
+                        "products": [],
                         "send_images": False,
                     }
 
                 # Buscar en el catálogo: esto SOLO devuelve productos que realmente existen
                 catalog_products = search_products(search_query)
 
-                if not catalog_products:
+                if not catalog_products:    
                     return {
                         "handled": True,
                         "response": (
