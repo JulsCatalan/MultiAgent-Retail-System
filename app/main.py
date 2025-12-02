@@ -777,9 +777,11 @@ async def checkout_success(session_id: str = Query(..., description="Stripe sess
         
         # 5. Obtener dirección de envío (si existe)
         shipping_address = None
-        if session.shipping_details:
-            address = session.shipping_details.address
-            shipping_address = f"{address.line1}, {address.city}, {address.state} {address.postal_code}, {address.country}"
+        shipping_details = getattr(session, 'shipping_details', None)
+        if shipping_details and hasattr(shipping_details, 'address'):
+            address = shipping_details.address
+            if address:
+                shipping_address = f"{address.line1}, {address.city}, {address.state} {address.postal_code}, {address.country}"
         
         # 6. Crear orden en la BD
         cur.execute("""
