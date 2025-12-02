@@ -120,37 +120,40 @@ REGLAS IMPORTANTES:
 
 2. mode = "show_cart" → "ver carrito", "qué tengo", "muéstrame el carrito"
 
-3. mode = "add_to_cart" → SOLO si el producto NO está en el carrito y usa palabras como "agrega", "quiero", "añade"
+3. mode = "add_to_cart" → SOLO si quiere agregar UN producto
    - product_index = número del producto en la lista reciente
 
-4. mode = "remove_from_cart" → SI CUALQUIERA de estas condiciones se cumple:
+4. mode = "remove_from_cart" → SOLO si quiere quitar UN producto
    - Usa palabras: "quita", "elimina", "remove", "saca", "borra"
-   - Menciona NÚMEROS solos ("2 y 3", "1, 2", "el 2") → SIEMPRE es eliminar del carrito
-   - Menciona nombres de productos que YA ESTÁN EN EL CARRITO → es eliminar
-   - Menciona categorías: "tops", "blusas", "bottoms", "shorts"
-   - Menciona colores o precios para filtrar
-   
-   CLAVE: Si el usuario dice "EDC vanilla blouse" y ese producto ESTÁ en el carrito → ELIMINAR, no agregar
-   CLAVE: Si dice "2 y 3" después de ver el carrito → ELIMINAR items 2 y 3
    - product_index = NULL (el parser avanzado lo maneja)
 
-5. Si el usuario quiere PROCEDER AL PAGO ("pagar", "checkout", "proceder al pago", "comprar", "finalizar compra", "quiero pagar", "pagar ahora"):
-   - mode = "checkout"
+5. mode = "multi_action" → Si el usuario quiere hacer MÚLTIPLES acciones en una sola petición:
+   - "agrega el 1 y el 3" → agregar múltiples productos
+   - "quita el 2 y el 4" → eliminar múltiples
+   - "agrega la chaqueta azul y los pantalones" → múltiples por descripción
+   - "quita los calcetines pero agrega la camisa" → mezcla de agregar Y quitar
+   - CLAVE: Si menciona "y", "también", múltiples números separados por coma, o mezcla agregar/quitar → multi_action
 
-6. Si el usuario quiere SEGUIR COMPRANDO después de ver el checkout ("seguir comprando", "agregar más", "modificar carrito", "cancelar pago", "espera", "añadir más productos"):
-   - mode = "continue_shopping"
+6. mode = "checkout" → "pagar", "checkout", "proceder al pago", "comprar", "finalizar compra", "quiero pagar"
 
-7. Si el usuario quiere VACIAR todo el carrito ("vaciar carrito", "eliminar todo", "borrar carrito", "empezar de nuevo"):
-   - mode = "clear_cart"
+7. mode = "continue_shopping" → "seguir comprando", "agregar más", "modificar carrito", "cancelar pago"
 
-8. Si el usuario es ambiguo, establece needs_confirmation = true y confidence menor (0.5).
+8. mode = "clear_cart" → "vaciar carrito", "eliminar todo", "borrar carrito"
 
-9. NUNCA inventes productos que no están en la lista reciente.
+9. Si el usuario es ambiguo, establece needs_confirmation = true y confidence menor (0.5).
+
+10. NUNCA inventes productos que no están en la lista.
+
+EJEMPLOS DE MULTI_ACTION:
+- "agrega el 1, 2 y 5" → multi_action
+- "quita el rojo y agrega el azul" → multi_action
+- "agrega la chaqueta y los pantalones" → multi_action
+- "el 1 y el 3" → multi_action (asumiendo agregar múltiples)
 
 Formato de respuesta:
 Responde SOLO con un JSON válido, sin texto adicional:
 {{
-  "mode": "none" | "add_to_cart" | "remove_from_cart" | "show_cart" | "checkout" | "continue_shopping" | "clear_cart",
+  "mode": "none" | "add_to_cart" | "remove_from_cart" | "show_cart" | "checkout" | "continue_shopping" | "clear_cart" | "multi_action",
   "product_index": <número del producto o null>,
   "needs_confirmation": true | false,
   "confidence": <número entre 0.0 y 1.0>
@@ -456,6 +459,248 @@ Ejemplos de respuesta:
     )
 
     return response.choices[0].message.content.strip()
+
+
+def parse_multi_action_cart_request(
+    user_message: str,
+    recent_products: List[Dict[str, Any]],
+    cart_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Analiza solicitudes que involucran múltiples acciones de carrito:
+    - "agrega la chaqueta azul y los pantalones naranjas"
+    - "agrega el producto 3 y los últimos jeans que me mostraste"
+    - "quita los calcetines verdes pero agrega los azules"
+    - "agrega 1, 2 y 5"
+    - "quita el 2 pero agrega el 4"
+    
+    Returns:
+        Dict con:
+        - has_multi_action: bool
+        - items_to_add: List[Dict] con {reference, resolved_product, confidence}
+        - items_to_remove: List[Dict] con {reference, resolved_article_id, confidence}
+        - description: str
+        - needs_confirmation: bool
+    """
+    # Formatear productos recientes
+    if recent_products:
+        recent_text = "\n".join([
+            f"Producto {p['position']}: {p['prod_name']} ({p['colour_group_name']}) - {p['product_type_name']} - ${p['price_mxn']:.2f}"
+            for p in recent_products
+        ])
+    else:
+        recent_text = "No hay productos recientes."
+    
+    # Formatear carrito actual
+    if cart_items:
+        cart_text = "\n".join([
+            f"Carrito Item {i+1}: article_id={item['article_id']} | {item['prod_name']} ({item['colour_group_name']}) - {item['product_type_name']}"
+            for i, item in enumerate(cart_items)
+        ])
+    else:
+        cart_text = "Carrito vacío."
+    
+    prompt = f"""Analiza este mensaje para identificar TODAS las acciones de carrito que el usuario quiere hacer.
+
+MENSAJE: "{user_message}"
+
+PRODUCTOS RECIENTES (para AGREGAR):
+{recent_text}
+
+CARRITO ACTUAL (para QUITAR):
+{cart_text}
+
+INSTRUCCIONES:
+1. Identifica CADA producto que el usuario quiere AGREGAR (de productos recientes)
+2. Identifica CADA producto que el usuario quiere QUITAR (del carrito)
+3. El usuario puede mezclar: "agrega X y Y", "quita A pero agrega B", "1, 2 y 5"
+4. Referencias pueden ser:
+   - Por número: "producto 3", "el 1 y el 2", "1, 3, 5"
+   - Por descripción: "la chaqueta azul", "los jeans"
+   - Por posición: "el último", "el primero"
+   - Mixtas: "producto 3 y la camisa blanca"
+
+Responde SOLO JSON:
+{{
+  "has_multi_action": true/false,
+  "items_to_add": [
+    {{"reference": "descripción del usuario", "product_position": número_en_recientes_o_null, "confidence": 0.0-1.0}}
+  ],
+  "items_to_remove": [
+    {{"reference": "descripción del usuario", "cart_item_number": número_en_carrito_o_null, "article_id": "id_o_null", "confidence": 0.0-1.0}}
+  ],
+  "description": "Resumen de acciones",
+  "needs_confirmation": true/false
+}}
+
+EJEMPLOS:
+- "agrega el 1 y el 3" → items_to_add: [{{product_position: 1}}, {{product_position: 3}}]
+- "quita el 2 pero agrega el 4" → items_to_remove: [{{cart_item_number: 2}}], items_to_add: [{{product_position: 4}}]
+- "agrega la chaqueta azul y los pantalones" → items_to_add con referencias por descripción"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=600,
+        temperature=0.1,
+    )
+    
+    content = response.choices[0].message.content.strip()
+    
+    try:
+        data = json.loads(content)
+        return {
+            "has_multi_action": data.get("has_multi_action", False),
+            "items_to_add": data.get("items_to_add", []),
+            "items_to_remove": data.get("items_to_remove", []),
+            "description": data.get("description", ""),
+            "needs_confirmation": data.get("needs_confirmation", False),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        logger.error(f"Error parsing multi-action response: {e}")
+        return {
+            "has_multi_action": False,
+            "items_to_add": [],
+            "items_to_remove": [],
+            "description": "Error procesando solicitud",
+            "needs_confirmation": True,
+        }
+
+
+def execute_multi_action_cart(
+    conversation_id: str,
+    multi_action: Dict[str, Any],
+    recent_products: List[Dict[str, Any]],
+    cart_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Ejecuta múltiples acciones de carrito (agregar y/o quitar).
+    
+    Returns:
+        Dict con:
+        - success: bool
+        - added: List[str] nombres de productos agregados
+        - removed: List[str] nombres de productos quitados
+        - failed: List[str] acciones que fallaron
+        - summary: str resumen para el usuario
+    """
+    added = []
+    removed = []
+    failed = []
+    
+    # Procesar items a agregar
+    for item_add in multi_action.get("items_to_add", []):
+        try:
+            position = item_add.get("product_position")
+            reference = item_add.get("reference", "")
+            
+            product = None
+            
+            # Si tiene posición, buscar por posición
+            if position and recent_products:
+                product = next((p for p in recent_products if p["position"] == position), None)
+            
+            # Si no se encontró por posición, buscar por referencia
+            if not product and reference and recent_products:
+                # Buscar coincidencia parcial en nombre
+                ref_lower = reference.lower()
+                for p in recent_products:
+                    name_lower = p["prod_name"].lower()
+                    color_lower = p.get("colour_group_name", "").lower()
+                    type_lower = p.get("product_type_name", "").lower()
+                    
+                    if (ref_lower in name_lower or 
+                        name_lower in ref_lower or
+                        ref_lower in color_lower or
+                        ref_lower in type_lower):
+                        product = p
+                        break
+            
+            # Si aún no se encontró y hay referencia, buscar en catálogo
+            if not product and reference:
+                logger.info(f"🔍 Buscando en catálogo: {reference}")
+                catalog_results = search_products(reference)
+                if catalog_results:
+                    product = catalog_results[0]
+                    logger.info(f"📦 Encontrado en catálogo: {product['prod_name']}")
+            
+            if product:
+                add_to_cart(conversation_id, product["article_id"], quantity=1)
+                added.append(f"{product['prod_name']} ({product.get('colour_group_name', '')})")
+                logger.info(f"✅ Agregado: {product['prod_name']}")
+            else:
+                failed.append(f"No encontré: {reference or f'producto {position}'}")
+                
+        except Exception as e:
+            logger.error(f"Error agregando item: {e}")
+            failed.append(f"Error agregando: {item_add.get('reference', 'producto')}")
+    
+    # Procesar items a quitar
+    for item_remove in multi_action.get("items_to_remove", []):
+        try:
+            cart_num = item_remove.get("cart_item_number")
+            article_id = item_remove.get("article_id")
+            reference = item_remove.get("reference", "")
+            
+            target_article_id = None
+            target_name = ""
+            
+            # Si tiene número de carrito
+            if cart_num and cart_items and 1 <= cart_num <= len(cart_items):
+                item = cart_items[cart_num - 1]
+                target_article_id = item["article_id"]
+                target_name = f"{item['prod_name']} ({item['colour_group_name']})"
+            
+            # Si tiene article_id directo
+            elif article_id:
+                target_article_id = article_id
+                item = next((i for i in cart_items if str(i["article_id"]) == str(article_id)), None)
+                if item:
+                    target_name = f"{item['prod_name']} ({item['colour_group_name']})"
+            
+            # Si solo tiene referencia, buscar en carrito
+            elif reference and cart_items:
+                ref_lower = reference.lower()
+                for item in cart_items:
+                    name_lower = item["prod_name"].lower()
+                    color_lower = item.get("colour_group_name", "").lower()
+                    type_lower = item.get("product_type_name", "").lower()
+                    
+                    if (ref_lower in name_lower or 
+                        name_lower in ref_lower or
+                        ref_lower in color_lower or
+                        ref_lower in type_lower):
+                        target_article_id = item["article_id"]
+                        target_name = f"{item['prod_name']} ({item['colour_group_name']})"
+                        break
+            
+            if target_article_id:
+                remove_from_cart(conversation_id, str(target_article_id))
+                removed.append(target_name or f"Item {cart_num}")
+                logger.info(f"✅ Quitado: {target_name}")
+            else:
+                failed.append(f"No encontré en carrito: {reference or f'item {cart_num}'}")
+                
+        except Exception as e:
+            logger.error(f"Error quitando item: {e}")
+            failed.append(f"Error quitando: {item_remove.get('reference', 'producto')}")
+    
+    # Construir resumen
+    summary_parts = []
+    if added:
+        summary_parts.append(f"Agregué: {', '.join(added)}")
+    if removed:
+        summary_parts.append(f"Quité: {', '.join(removed)}")
+    if failed:
+        summary_parts.append(f"No pude: {', '.join(failed)}")
+    
+    return {
+        "success": len(added) > 0 or len(removed) > 0,
+        "added": added,
+        "removed": removed,
+        "failed": failed,
+        "summary": " | ".join(summary_parts) if summary_parts else "No se realizaron cambios",
+    }
 
 
 def parse_advanced_removal_request(
@@ -986,6 +1231,146 @@ def handle_cart_interaction(
             response += "\n\nTu carrito quedó vacío."
         
         response += "\n\n¿Algo más?"
+        
+        return {"handled": True, "response": response, "products": [], "send_images": False}
+
+    # Múltiples acciones de carrito en una sola petición
+    if mode == "multi_action":
+        logger.info(f"🔄 Usuario quiere realizar múltiples acciones - ConvID: {conversation_id}")
+        
+        # Obtener estado actual
+        current_cart_items = get_cart(conversation_id)
+        
+        # Parsear la solicitud multi-acción
+        multi_result = parse_multi_action_cart_request(
+            user_message,
+            recent,
+            current_cart_items or []
+        )
+        
+        logger.info(
+            f"📋 Multi-acción parseada - "
+            f"Agregar: {len(multi_result['items_to_add'])}, "
+            f"Quitar: {len(multi_result['items_to_remove'])}, "
+            f"Confirmación: {multi_result['needs_confirmation']}"
+        )
+        
+        if not multi_result["has_multi_action"]:
+            # No se detectó multi-acción clara, mostrar ayuda
+            return {
+                "handled": True,
+                "response": (
+                    "No entendí bien qué productos quieres modificar. 🤔\n\n"
+                    "Puedes decirme por ejemplo:\n"
+                    "• \"agrega el 1 y el 3\"\n"
+                    "• \"quita los pantalones y agrega la camisa\"\n"
+                    "• \"agrega la chaqueta azul y los zapatos\""
+                ),
+                "products": [],
+                "send_images": False,
+            }
+        
+        # Verificar que haya productos recientes para agregar
+        if multi_result["items_to_add"] and not recent:
+            return {
+                "handled": True,
+                "response": (
+                    "No te he mostrado productos todavía. 🔍\n\n"
+                    "Dime qué buscas y te muestro opciones para agregar."
+                ),
+                "products": [],
+                "send_images": False,
+            }
+        
+        # Verificar que haya items en carrito para quitar
+        if multi_result["items_to_remove"] and not current_cart_items:
+            return {
+                "handled": True,
+                "response": (
+                    "Tu carrito está vacío, no hay nada que quitar. 🛒\n\n"
+                    "¿Quieres que agregue los productos que mencionaste?"
+                ),
+                "products": [],
+                "send_images": False,
+            }
+        
+        # Si necesita confirmación por ambigüedad
+        if multi_result["needs_confirmation"]:
+            desc = multi_result.get("description", "realizar estos cambios")
+            return {
+                "handled": True,
+                "response": (
+                    f"Entiendo que quieres: {desc}\n\n"
+                    f"¿Es correcto? Dime 'sí' para confirmar."
+                ),
+                "products": [],
+                "send_images": False,
+            }
+        
+        # Ejecutar las acciones
+        execution_result = execute_multi_action_cart(
+            conversation_id,
+            multi_result,
+            recent,
+            current_cart_items or []
+        )
+        
+        logger.info(
+            f"✅ Ejecución multi-acción - "
+            f"Agregados: {len(execution_result['added'])}, "
+            f"Quitados: {len(execution_result['removed'])}, "
+            f"Fallidos: {len(execution_result['failed'])}"
+        )
+        
+        # Construir respuesta natural
+        response_parts = []
+        
+        if execution_result["added"]:
+            if len(execution_result["added"]) == 1:
+                response_parts.append(f"✅ Agregué {execution_result['added'][0]}")
+            else:
+                added_text = ", ".join(execution_result["added"])
+                response_parts.append(f"✅ Agregué: {added_text}")
+        
+        if execution_result["removed"]:
+            if len(execution_result["removed"]) == 1:
+                response_parts.append(f"✅ Quité {execution_result['removed'][0]}")
+            else:
+                removed_text = ", ".join(execution_result["removed"])
+                response_parts.append(f"✅ Quité: {removed_text}")
+        
+        if execution_result["failed"]:
+            failed_text = ", ".join(execution_result["failed"])
+            response_parts.append(f"⚠️ {failed_text}")
+        
+        if not response_parts:
+            response = "Mmm, no pude hacer esos cambios. ¿Puedes ser más específico?"
+        else:
+            response = "\n".join(response_parts)
+        
+        # Mostrar resumen del carrito actualizado
+        updated_cart = get_cart(conversation_id)
+        if updated_cart:
+            cart_id = get_cart_by_conversation(conversation_id)
+            new_total = calculate_cart_total(cart_id) if cart_id else 0.0
+            response += f"\n\n🛒 Carrito: {len(updated_cart)} producto(s) - ${new_total:.2f} MXN"
+        else:
+            response += "\n\n🛒 Tu carrito quedó vacío."
+        
+        response += "\n\n¿Algo más?"
+        
+        # Return with images if products were added
+        if execution_result["added"]:
+            display_items = get_cart_items_for_display(conversation_id)
+            return {
+                "handled": True,
+                "response": response,
+                "products": [],
+                "send_images": True,
+                "image_type": "cart",
+                "cart_items": display_items,
+                "cart_total": calculate_cart_total(get_cart_by_conversation(conversation_id)) if get_cart_by_conversation(conversation_id) else 0.0
+            }
         
         return {"handled": True, "response": response, "products": [], "send_images": False}
 
