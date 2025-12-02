@@ -150,6 +150,31 @@ def init_db():
         ON products(price_mxn)
     """)
     
+    # Tabla de preferencias del usuario
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            preference_type TEXT NOT NULL,
+            preference_value TEXT NOT NULL,
+            confidence REAL DEFAULT 1.0,
+            source_message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(conversation_id, preference_type)
+        )
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_preferences_conversation
+        ON user_preferences(conversation_id)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_preferences_type
+        ON user_preferences(preference_type)
+    """)
+    
     # ⭐ IMPORTANTE: Hacer commit ANTES de cerrar
     conn.commit()
     conn.close()
